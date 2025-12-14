@@ -84,3 +84,21 @@ sudo docker logs 3xui_app -f
 sudo rm -f db/x-ui.db && sudo docker-compose up -d --build
 ```
 
+## Обновление с оригинального репозитория
+
+```bash
+# Получить обновления из оригинала
+git fetch upstream
+
+# Слить изменения (ваши файлы НЕ перезапишутся)
+git merge upstream/main
+
+# Запушить в ваш форк
+git push origin main
+
+# Пересобрать контейнер
+sudo docker-compose down && sudo docker-compose up -d --build
+```
+
+> **Примечание:** Благодаря `.gitattributes` с `merge=ours` ваши кастомные файлы 
+> и удалённые файлы не будут затронуты при merge.
