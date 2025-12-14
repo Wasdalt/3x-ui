@@ -1,16 +1,37 @@
 services:
   3xui:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
+    build: .
     container_name: 3xui_app
-    # hostname: yourhostname <- optional
+    hostname: ${XUI_DOMAIN:-localhost}
     volumes:
-      - $PWD/db/:/etc/x-ui/
-      - $PWD/cert/:/root/cert/
+      # База данных панели
+      - ./db/:/etc/x-ui/
+      # SSL сертификаты Let's Encrypt
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    env_file:
+      - .env
     environment:
-      XRAY_VMESS_AEAD_FORCED: "false"
-      XUI_ENABLE_FAIL2BAN: "true"
+      - XUI_ENABLE_FAIL2BAN=${XUI_ENABLE_FAIL2BAN:-true}
+      - XUI_FAIL2BAN_BANTIME=${XUI_FAIL2BAN_BANTIME:-30}
+      - XUI_FAIL2BAN_MAXRETRY=${XUI_FAIL2BAN_MAXRETRY:-2}
+      - XUI_FAIL2BAN_FINDTIME=${XUI_FAIL2BAN_FINDTIME:-32}
     tty: true
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - certbot
+
+  # Certbot для автоматического получения и обновления SSL сертификатов
+  certbot:
+    image: certbot/certbot:latest
+    container_name: 3xui_certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - ./certbot-logs:/var/log/letsencrypt
+      - ./certbot-init.sh:/certbot-init.sh:ro
+    env_file:
+      - .env
+    # Автоматический выпуск и обновление сертификатов
+    entrypoint: [ "/bin/sh", "/certbot-init.sh" ]
     network_mode: host
     restart: unless-stopped

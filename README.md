@@ -1,57 +1,86 @@
-[English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) |  [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md)
+# 3x-ui Docker с автоконфигурацией
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./media/3x-ui-dark.png">
-    <img alt="3x-ui" src="./media/3x-ui-light.png">
-  </picture>
-</p>
+Этот форк добавляет поддержку конфигурации через переменные окружения.
 
-[![Release](https://img.shields.io/github/v/release/mhsanaei/3x-ui.svg)](https://github.com/MHSanaei/3x-ui/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg)](https://github.com/MHSanaei/3x-ui/actions)
-[![GO Version](https://img.shields.io/github/go-mod/go-version/mhsanaei/3x-ui.svg)](#)
-[![Downloads](https://img.shields.io/github/downloads/mhsanaei/3x-ui/total.svg)](https://github.com/MHSanaei/3x-ui/releases/latest)
-[![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0.en.html)
-[![Go Reference](https://pkg.go.dev/badge/github.com/mhsanaei/3x-ui/v2.svg)](https://pkg.go.dev/github.com/mhsanaei/3x-ui/v2)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mhsanaei/3x-ui/v2)](https://goreportcard.com/report/github.com/mhsanaei/3x-ui/v2)
-
-**3X-UI** — advanced, open-source web-based control panel designed for managing Xray-core server. It offers a user-friendly interface for configuring and monitoring various VPN and proxy protocols.
-
-> [!IMPORTANT]
-> This project is only for personal usage, please do not use it for illegal purposes, and please do not use it in a production environment.
-
-As an enhanced fork of the original X-UI project, 3X-UI provides improved stability, broader protocol support, and additional features.
-
-## Quick Start
+## Быстрый старт
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+# 1. Создать .env из шаблона
+cp .env.example .env
+
+# 2. Отредактировать настройки
+nano .env
+
+# 3. Запустить
+sudo docker-compose up -d --build
 ```
 
-For full documentation, please visit the [project Wiki](https://github.com/MHSanaei/3x-ui/wiki).
+## Доступные переменные (.env)
 
-## A Special Thanks to
+| Переменная | Описание | По умолчанию |
+|------------|----------|--------------|
+| `XUI_PORT` | Порт панели | `2053` |
+| `XUI_DOMAIN` | Домен (hostname) | `localhost` |
+| `XUI_BASE_PATH` | Базовый путь | `/` |
+| `XUI_CERT_FILE` | Путь к SSL сертификату | — |
+| `XUI_KEY_FILE` | Путь к SSL ключу | — |
+| `XUI_SUB_PORT` | Порт подписок | `2096` |
+| `XUI_SUB_PATH` | Путь подписок | `/sub/` |
+| `XUI_SESSION_TIMEOUT` | Таймаут сессии (сек) | `60` |
+| `XUI_TG_ENABLE` | Telegram бот | `false` |
+| `XUI_TG_TOKEN` | Токен бота | — |
+| `XUI_TG_ADMIN_ID` | ID админа | — |
+| `XUI_ENABLE_FAIL2BAN` | Fail2Ban | `true` |
+| `XRAY_VMESS_AEAD_FORCED` | VMESS AEAD | `false` |
 
-- [alireza0](https://github.com/alireza0/)
+## Как это работает
 
-## Acknowledgment
+1. При запуске контейнера выполняется `init-config.sh`
+2. Скрипт читает переменные окружения из `.env`
+3. Записывает их в базу данных панели `/etc/x-ui/x-ui.db`
+4. Панель стартует с применёнными настройками
 
-- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (License: **GPL-3.0**): _Enhanced v2ray/xray and v2ray/xray-clients routing rules with built-in Iranian domains and a focus on security and adblocking._
-- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (License: **GPL-3.0**): _This repository contains automatically updated V2Ray routing rules based on data on blocked domains and addresses in Russia._
+## SSL сертификаты
 
-## Support project
+### Первоначальное получение сертификата
 
-**If this project is helpful to you, you may wish to give it a**:star2:
+```bash
+# Остановите контейнер (порт 80 нужен свободным)
+sudo docker-compose down
 
-<a href="https://www.buymeacoffee.com/MHSanaei" target="_blank">
-<img src="./media/default-yellow.png" alt="Buy Me A Coffee" style="height: 70px !important;width: 277px !important;" >
-</a>
+# Получите сертификат
+sudo ./ssl-setup.sh yourdomain.com admin@yourdomain.com
 
-</br>
-<a href="https://nowpayments.io/donation/hsanaei" target="_blank" rel="noreferrer noopener">
-   <img src="./media/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
-</a>
+# Обновите .env с правильными путями
+# Запустите контейнер
+sudo docker-compose up -d --build
+```
 
-## Stargazers over Time
+### Автоматическое обновление
 
-[![Stargazers over time](https://starchart.cc/MHSanaei/3x-ui.svg?variant=adaptive)](https://starchart.cc/MHSanaei/3x-ui)
+Контейнер `certbot` автоматически проверяет и обновляет сертификаты каждые 12 часов.
+
+После обновления сертификата перезапустите панель:
+```bash
+sudo docker-compose restart 3xui
+```
+
+## Полезные команды
+
+```bash
+# Перезапуск БЕЗ пересборки (быстро, если .env не менялся)
+sudo docker-compose restart
+
+# Перезапуск с применением изменений из .env (без пересборки образа)
+sudo docker-compose down && sudo docker-compose up -d
+
+# Полная пересборка (если менялись Dockerfile, скрипты)
+sudo docker-compose down && sudo docker-compose up -d --build
+
+# Просмотр логов
+sudo docker logs 3xui_app -f
+
+# Сброс базы данных (полный сброс настроек)
+sudo rm -f db/x-ui.db && sudo docker-compose up -d --build
+```
+

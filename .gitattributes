@@ -1,0 +1,52 @@
+# ============================================================================
+# Git attributes для форка 3x-ui
+# При merge из upstream эти файлы сохраняют локальную версию (не обновляются)
+# ============================================================================
+
+# ============================================================================
+# КАСТОМНЫЕ ФАЙЛЫ (защита от перезаписи)
+# ============================================================================
+
+# Docker конфигурация
+Dockerfile merge=ours
+docker-compose.yml merge=ours
+docker-entrypoint-wrapper.sh merge=ours
+init-config.sh merge=ours
+certbot-init.sh merge=ours
+check-dns.sh merge=ours
+ssl-setup.sh merge=ours
+.env.example merge=ours
+
+# Документация
+README.md merge=ours
+SETTINGS.md merge=ours
+ADVANCED.md merge=ours
+TODO.md merge=ours
+DELETED_FILES.md merge=ours
+
+# ============================================================================
+# УДАЛЁННЫЕ ФАЙЛЫ (не восстанавливать)
+# ============================================================================
+
+# Скриншоты
+media/** merge=ours
+
+# README переводы
+README.ar_EG.md merge=ours
+README.es_ES.md merge=ours
+README.fa_IR.md merge=ours
+README.ru_RU.md merge=ours
+README.zh_CN.md merge=ours
+
+# GitHub файлы
+.github/** merge=ours
+
+# Скрипты установки (не используем - Docker)
+install.sh merge=ours
+update.sh merge=ours
+
+# Системные файлы
+x-ui.service merge=ours
+x-ui.rc merge=ours
+windows_files/** merge=ours
+.vscode/** merge=ours
