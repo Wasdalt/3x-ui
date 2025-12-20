@@ -41,3 +41,9 @@ docker-compose.override.yml
 # Environment
 .env
 .env.local
+
+# Runtime data
+torrent-data/
+db/
+xray-torrent-blocker/
+xray-iplimit-blocker/

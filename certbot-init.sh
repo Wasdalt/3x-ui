@@ -1,48 +1,35 @@
 #!/bin/sh
 # ============================================================================
-# Скрипт автоматического получения/обновления SSL сертификатов
-# Поддерживает отдельные домены для панели и подписки
-# Включает проверку DNS перед выпуском сертификата
+# SSL Certificate Auto-setup / Автоматическая настройка SSL
+# Supports separate domains for panel and subscription
+# Includes DNS verification before certificate issue
 # ============================================================================
 
 set -e
 
-# Домены
 PANEL_DOMAIN="${XUI_DOMAIN:-}"
 SUB_DOMAIN="${XUI_SUB_DOMAIN:-}"
 EMAIL="${XUI_ADMIN_EMAIL:-admin@$PANEL_DOMAIN}"
 
-echo "🔐 SSL Auto-setup starting..."
-echo "   Panel domain: $PANEL_DOMAIN"
-echo "   Sub domain: ${SUB_DOMAIN:-same as panel}"
-echo "   Email: $EMAIL"
+echo "🔐 SSL Auto-setup"
+echo "   Panel: ${PANEL_DOMAIN:-not set}"
+echo "   Sub: ${SUB_DOMAIN:-same as panel}"
 
-# Функция проверки DNS
 check_dns() {
     domain=$1
-    if [ -z "$domain" ] || [ "$domain" = "localhost" ]; then
-        return 0
-    fi
+    [ -z "$domain" ] || [ "$domain" = "localhost" ] && return 0
     
-    echo "🔍 Проверка DNS для $domain..."
+    echo "🔍 Checking DNS for $domain..."
     
-    # Получаем IP сервера (IPv4)
     VPS_IP=$(wget -4 -qO- --timeout=5 ifconfig.me 2>/dev/null || wget -4 -qO- --timeout=5 api.ipify.org 2>/dev/null || echo "")
-    if [ -z "$VPS_IP" ]; then
-        echo "⚠️  Не удалось определить IP сервера, пропускаем проверку"
-        return 0
-    fi
+    [ -z "$VPS_IP" ] && echo "⚠️  Cannot detect server IP" && return 0
     
-    # Получаем A запись домена
     DOMAIN_IP=$(nslookup "$domain" 2>/dev/null | grep -A1 "Name:" | grep "Address" | awk '{print $2}' | head -1)
-    if [ -z "$DOMAIN_IP" ]; then
-        # Альтернативный метод через getent
-        DOMAIN_IP=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | head -1)
-    fi
+    [ -z "$DOMAIN_IP" ] && DOMAIN_IP=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | head -1)
     
     if [ -z "$DOMAIN_IP" ]; then
-        echo "❌ DNS для $domain не найден!"
-        echo "   Добавьте A запись: $domain -> $VPS_IP"
+        echo "❌ DNS not found for $domain"
+        echo "   Add A record: $domain -> $VPS_IP"
         return 1
     fi
     
@@ -50,33 +37,23 @@ check_dns() {
         echo "✅ DNS OK: $domain -> $VPS_IP"
         return 0
     else
-        echo "❌ DNS не совпадает!"
-        echo "   Домен указывает на: $DOMAIN_IP"
-        echo "   IP сервера: $VPS_IP"
-        echo "   Обновите A запись: $domain -> $VPS_IP"
+        echo "❌ DNS mismatch: $domain -> $DOMAIN_IP (server: $VPS_IP)"
         return 1
     fi
 }
 
-# Функция получения сертификата
 get_cert() {
     domain=$1
-    if [ -z "$domain" ] || [ "$domain" = "localhost" ]; then
-        return 0
-    fi
+    [ -z "$domain" ] || [ "$domain" = "localhost" ] && return 0
     
     cert_path="/etc/letsencrypt/live/$domain"
     
     if [ -d "$cert_path" ] && [ -f "$cert_path/fullchain.pem" ]; then
-        echo "✅ Сертификат для $domain уже существует"
+        echo "✅ Certificate exists: $domain"
     else
-        # Проверяем DNS перед выпуском
-        if ! check_dns "$domain"; then
-            echo "⚠️  Пропускаем выпуск сертификата для $domain (DNS не настроен)"
-            return 1
-        fi
+        check_dns "$domain" || { echo "⚠️  Skipping $domain (DNS not configured)"; return 1; }
         
-        echo "📋 Получаем сертификат для $domain..."
+        echo "📋 Requesting certificate for $domain..."
         sleep 3
         
         certbot certonly \
@@ -86,30 +63,34 @@ get_cert() {
             --email "$EMAIL" \
             -d "$domain" \
             --preferred-challenges http \
-            || echo "⚠️  Не удалось получить сертификат для $domain"
+            || echo "⚠️  Failed to get certificate for $domain"
         
-        if [ -f "$cert_path/fullchain.pem" ]; then
-            echo "✅ Сертификат для $domain получен!"
-        fi
+        [ -f "$cert_path/fullchain.pem" ] && echo "✅ Certificate obtained: $domain"
     fi
 }
 
-# Проверяем домены
 if [ -z "$PANEL_DOMAIN" ] || [ "$PANEL_DOMAIN" = "localhost" ]; then
-    echo "⚠️  XUI_DOMAIN не указан или равен localhost"
-    echo "   Переходим в режим обновления существующих сертификатов..."
-else
-    # Получаем сертификат для панели
-    get_cert "$PANEL_DOMAIN"
+    echo "⚠️  XUI_DOMAIN not set"
     
-    # Получаем сертификат для подписки (если отдельный домен)
-    if [ -n "$SUB_DOMAIN" ] && [ "$SUB_DOMAIN" != "$PANEL_DOMAIN" ]; then
-        get_cert "$SUB_DOMAIN"
+    # Check for backup domain request flag
+    if [ -f "/etc/letsencrypt/request-cert.flag" ]; then
+        BACKUP_DOMAIN=$(cat /etc/letsencrypt/request-cert.flag)
+        if [ -n "$BACKUP_DOMAIN" ]; then
+            echo "📋 Certificate request from backup: $BACKUP_DOMAIN"
+            EMAIL="${XUI_ADMIN_EMAIL:-admin@$BACKUP_DOMAIN}"
+            get_cert "$BACKUP_DOMAIN"
+            rm -f /etc/letsencrypt/request-cert.flag
+        fi
+    else
+        echo "   Entering renewal-only mode..."
     fi
+else
+    get_cert "$PANEL_DOMAIN"
+    [ -n "$SUB_DOMAIN" ] && [ "$SUB_DOMAIN" != "$PANEL_DOMAIN" ] && get_cert "$SUB_DOMAIN"
 fi
 
-# Цикл автообновления каждые 12 часов
-echo "🔄 Запуск цикла автообновления (каждые 12 часов)..."
+# Auto-renewal loop (every 12 hours)
+echo "🔄 Starting renewal loop..."
 trap exit TERM
 while :; do
     certbot renew --standalone --quiet || true

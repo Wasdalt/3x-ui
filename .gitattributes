@@ -15,6 +15,7 @@ init-config.sh merge=ours
 certbot-init.sh merge=ours
 check-dns.sh merge=ours
 ssl-setup.sh merge=ours
+xray-iplimit-blocker/** merge=ours
 .env.example merge=ours
 
 # Документация

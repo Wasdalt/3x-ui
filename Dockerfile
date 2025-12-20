@@ -3,15 +3,11 @@
 # ========================================================
 FROM ghcr.io/mhsanaei/3x-ui:latest
 
-# Добавляем sqlite3 для конфигурации через init скрипт
+# Добавляем sqlite3 для конфигурации
 RUN apk add --no-cache sqlite
 
-# Копируем init скрипт
-COPY init-config.sh /app/init-config.sh
-RUN chmod +x /app/init-config.sh
-
-# Переопределяем entrypoint для запуска init скрипта
-COPY docker-entrypoint-wrapper.sh /app/docker-entrypoint-wrapper.sh
-RUN chmod +x /app/docker-entrypoint-wrapper.sh
+# Копируем скрипты в конце (изменение любого файла инвалидирует кеш)
+COPY init-config.sh docker-entrypoint-wrapper.sh /app/
+RUN chmod +x /app/init-config.sh /app/docker-entrypoint-wrapper.sh
 
 ENTRYPOINT ["/app/docker-entrypoint-wrapper.sh"]

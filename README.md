@@ -65,24 +65,63 @@ sudo docker-compose up -d --build
 sudo docker-compose restart 3xui
 ```
 
+## Защита IP лимитов
+
+### Режим 1: Fail2ban (по умолчанию)
+Автоматическая блокировка, работает сразу. Дополнительные контейнеры **не нужны**.
+
+```env
+XUI_ENABLE_FAIL2BAN=true
+XUI_FAIL2BAN_BANTIME=30  # минуты
+```
+
+### Режим 2: Webhook + xray-iplimit-blocker
+Отправляет нарушения на ваш API для принятия решения (ban/ignore/warn).
+
+```env
+XUI_IP_WEBHOOK_ENABLE=true
+XUI_IP_WEBHOOK_URL=https://your-api.com/webhook
+```
+
+**Требует запуск с профилем:**
+```bash
+sudo docker-compose --profile iplimit up -d
+```
+
+> ⚠️ При `XUI_IP_WEBHOOK_ENABLE=true` Fail2ban передаёт управление xray-iplimit-blocker
+
+## Применение изменений
+
+### Изменил только `.env`:
+```bash
+sudo docker-compose down && sudo docker-compose up -d
+```
+> Пересборка не нужна! `init-config.sh` автоматически применит настройки к БД при старте.
+
+### Изменил скрипты (`init-config.sh`, `docker-entrypoint-wrapper.sh`, `Dockerfile`):
+```bash
+sudo docker-compose down && sudo docker-compose build 3xui && sudo docker-compose up -d
+```
+
+### ⚠️ `restart` НЕ применяет `.env`:
+```bash
+# Это НЕ перечитает .env — только перезапустит процесс!
+sudo docker-compose restart 3xui
+```
+
 ## Полезные команды
 
 ```bash
-# Перезапуск БЕЗ пересборки (быстро, если .env не менялся)
-sudo docker-compose restart
-
-# Перезапуск с применением изменений из .env (без пересборки образа)
-sudo docker-compose down && sudo docker-compose up -d
-
-# Полная пересборка (если менялись Dockerfile, скрипты)
-sudo docker-compose down && sudo docker-compose up -d --build
-
 # Просмотр логов
 sudo docker logs 3xui_app -f
 
+# Проверить применённые настройки в БД
+sudo docker exec 3xui_app sqlite3 /etc/x-ui/x-ui.db "SELECT key, value FROM settings;"
+
 # Сброс базы данных (полный сброс настроек)
-sudo rm -f db/x-ui.db && sudo docker-compose up -d --build
+sudo rm -f db/x-ui.db && sudo docker-compose down && sudo docker-compose up -d
 ```
+
 
 ## Обновление с оригинального репозитория
 

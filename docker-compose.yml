@@ -8,6 +8,10 @@ services:
       - ./db/:/etc/x-ui/
       # SSL сертификаты Let's Encrypt
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Xray access.log — shared volume для torrent/iplimit блокировщиков
+      - xray-logs:/app
+      # Логи IP лимитов для iplimit-blocker  
+      - /var/log:/var/log
     env_file:
       - .env
     environment:
@@ -15,6 +19,9 @@ services:
       - XUI_FAIL2BAN_BANTIME=${XUI_FAIL2BAN_BANTIME:-30}
       - XUI_FAIL2BAN_MAXRETRY=${XUI_FAIL2BAN_MAXRETRY:-2}
       - XUI_FAIL2BAN_FINDTIME=${XUI_FAIL2BAN_FINDTIME:-32}
+      - XUI_XRAY_ACCESS_LOG=${XUI_XRAY_ACCESS_LOG:-}
+      - XUI_XRAY_ERROR_LOG=${XUI_XRAY_ERROR_LOG:-}
+      - XUI_XRAY_LOG_LEVEL=${XUI_XRAY_LOG_LEVEL:-}
     tty: true
     network_mode: host
     restart: unless-stopped
@@ -35,3 +42,68 @@ services:
     entrypoint: [ "/bin/sh", "/certbot-init.sh" ]
     network_mode: host
     restart: unless-stopped
+
+  # IP Limit Blocker с поддержкой webhook-решений
+  # Включается через XUI_IP_WEBHOOK_ENABLE=true
+  iplimit-blocker:
+    build: ./xray-iplimit-blocker
+    container_name: 3xui_iplimit
+    volumes:
+      # Лог нарушений от 3x-ui (создаётся панелью)
+      - /var/log:/var/log
+      # Хранение состояния блокировок
+      - ./iplimit-data:/app/data
+    env_file:
+      - .env
+    environment:
+      - XUI_IP_WEBHOOK_ENABLE=${XUI_IP_WEBHOOK_ENABLE:-false}
+      - XUI_IP_WAIT_WEBHOOK=${XUI_IP_WAIT_WEBHOOK:-true}
+      - XUI_IP_WEBHOOK_URL=${XUI_IP_WEBHOOK_URL:-}
+      - XUI_IP_WEBHOOK_TIMEOUT=${XUI_IP_WEBHOOK_TIMEOUT:-5}
+      - XUI_IP_DEFAULT_ACTION=${XUI_IP_DEFAULT_ACTION:-ban}
+      - XUI_IP_LOG_FILE=${XUI_IP_LOG_FILE:-/var/log/3xipl.log}
+      - XUI_FAIL2BAN_BANTIME=${XUI_FAIL2BAN_BANTIME:-30}
+    # Требуется для iptables
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    network_mode: host
+    restart: unless-stopped
+    # Запускается только если настроен webhook URL
+    profiles:
+      - iplimit
+
+  # Torrent Blocker - блокировка торрент-трафика
+  # Запуск: docker-compose --profile torrent up -d
+  torrent-blocker:
+    build: ./xray-torrent-blocker
+    container_name: 3xui_torrent
+    volumes:
+      # Xray access.log из shared volume (3xui пишет в /app/access.log)
+      - xray-logs:/app/xray-logs:ro
+      # Конфиг (создайте из config.yaml.example)
+      - ./xray-torrent-blocker/config.yaml:/app/config.yaml:ro
+      # Хранение данных о блокировках
+      - ./torrent-data:/app/data
+    env_file:
+      - .env
+    environment:
+      - XUI_TORRENT_WEBHOOK_ENABLE=${XUI_TORRENT_WEBHOOK_ENABLE:-false}
+      - XUI_TORRENT_WAIT_WEBHOOK=${XUI_TORRENT_WAIT_WEBHOOK:-false}
+      - XUI_TORRENT_WEBHOOK_URL=${XUI_TORRENT_WEBHOOK_URL:-}
+      - XUI_TORRENT_WEBHOOK_TIMEOUT=${XUI_TORRENT_WEBHOOK_TIMEOUT:-5}
+      - XUI_TORRENT_BAN_DURATION=${XUI_TORRENT_BAN_DURATION:-10}
+      - XUI_TORRENT_LOG_FILE=${XUI_TORRENT_LOG_FILE:-/app/xray-logs/access.log}
+      - XUI_TORRENT_BLOCK_MODE=${XUI_TORRENT_BLOCK_MODE:-iptables}
+    # Требуется для iptables
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    network_mode: host
+    restart: unless-stopped
+    profiles:
+      - torrent
+
+# Named volumes для шаринга между контейнерами
+volumes:
+  xray-logs:
