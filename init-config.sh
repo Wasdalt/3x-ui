@@ -92,6 +92,14 @@ if [ -z "$XUI_DOMAIN" ]; then
     KEY_FILE=""
     SUB_CERT_FILE=""
     SUB_KEY_FILE=""
+    
+    # HTTP fallback mode
+    if [ "$XUI_ALLOW_HTTP" = "true" ]; then
+        echo "[HTTP] HTTP mode enabled - panel accessible via http://server-ip:${XUI_PORT:-2053}"
+    else
+        echo "[TIP] Use SSH tunnel: ssh -N -L 8080:localhost:${XUI_PORT:-2053} user@server"
+        echo "[TIP] Or set XUI_ALLOW_HTTP=true for HTTP access (insecure!)"
+    fi
 else
     CERT_FILE="${XUI_CERT_FILE:-/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem}"
     KEY_FILE="${XUI_KEY_FILE:-/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem}"
@@ -104,6 +112,7 @@ else
         SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
     fi
 fi
+
 
 # ============================================================================
 # Panel Settings / Настройки панели
