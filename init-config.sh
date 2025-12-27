@@ -146,29 +146,55 @@ set_always "expireDiff" "$XUI_EXPIRE_DIFF"
 set_always "trafficDiff" "$XUI_TRAFFIC_DIFF"
 
 # ============================================================================
-# Xray Logging / Логирование Xray
+# Xray Logging / Логирование Xray (через БД / via database)
 # ============================================================================
+
+XRAY_CONFIG="/app/bin/config.json"
 
 if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_XRAY_LOG_LEVEL" ]; then
     echo "Configuring Xray logging..."
     
-    CURRENT_CONFIG=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null || echo "")
+    # Wait for config.json to exist (panel creates it on start)
+    # Ждём появления config.json (панель создаёт при старте)
+    for i in $(seq 1 30); do
+        [ -f "$XRAY_CONFIG" ] && break
+        sleep 0.5
+    done
     
-    if [ -n "$CURRENT_CONFIG" ]; then
-        NEW_CONFIG="$CURRENT_CONFIG"
+    if [ ! -f "$XRAY_CONFIG" ]; then
+        echo "[WARN] Xray config not found, skipping log configuration"
+    else
+        # Check if xrayTemplateConfig exists in DB, if not - create from config.json
+        # Проверяем наличие xrayTemplateConfig в БД, если нет - создаём из config.json
+        EXISTING=$(sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
         
-        if command -v jq >/dev/null 2>&1; then
+        if [ -z "$EXISTING" ]; then
+            echo "[DB] Creating xrayTemplateConfig from config.json..."
+            CONFIG_CONTENT=$(cat "$XRAY_CONFIG")
+            ESCAPED_CONFIG=$(echo "$CONFIG_CONTENT" | sed "s/'/''/g")
+            sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+        fi
+        
+        # Get current config from DB
+        CURRENT_CONFIG=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null || echo "")
+        
+        if [ -n "$CURRENT_CONFIG" ]; then
+            NEW_CONFIG="$CURRENT_CONFIG"
+            
+            # Apply log settings using jq
             [ -n "$XUI_XRAY_ACCESS_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val')
             [ -n "$XUI_XRAY_ERROR_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val')
             [ -n "$XUI_XRAY_LOG_LEVEL" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val')
+            
+            # Save to DB and config.json
+            ESCAPED_NEW=$(echo "$NEW_CONFIG" | sed "s/'/''/g")
+            sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
+            echo "$NEW_CONFIG" | jq . > "$XRAY_CONFIG"
+            
+            echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
         else
-            [ -n "$XUI_XRAY_ACCESS_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | sed "s|\"access\":[[:space:]]*\"[^\"]*\"|\"access\": \"$XUI_XRAY_ACCESS_LOG\"|")
-            [ -n "$XUI_XRAY_ERROR_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | sed "s|\"error\":[[:space:]]*\"[^\"]*\"|\"error\": \"$XUI_XRAY_ERROR_LOG\"|")
-            [ -n "$XUI_XRAY_LOG_LEVEL" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | sed "s|\"loglevel\":[[:space:]]*\"[^\"]*\"|\"loglevel\": \"$XUI_XRAY_LOG_LEVEL\"|")
+            echo "[WARN] Could not read xrayTemplateConfig from DB"
         fi
-        
-        sqlite3 "$DB_PATH" "UPDATE settings SET value='$(echo "$NEW_CONFIG" | sed "s/'/''/g")' WHERE key='xrayTemplateConfig';"
-        echo "[XRAY] Logging configured"
     fi
 fi
 

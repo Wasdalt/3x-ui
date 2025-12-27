@@ -3,10 +3,11 @@
 # ========================================================
 FROM ghcr.io/mhsanaei/3x-ui:latest
 
-# Добавляем sqlite3 для конфигурации
-RUN apk add --no-cache sqlite
+# Добавляем sqlite3 и jq для конфигурации
+RUN apk add --no-cache sqlite jq
 
-# Копируем скрипты в конце (изменение любого файла инвалидирует кеш)
+# Копируем скрипты (ARG инвалидирует кэш при сборке с --build-arg CACHEBUST=$(date +%s))
+ARG CACHEBUST=1
 COPY init-config.sh docker-entrypoint-wrapper.sh /app/
 RUN chmod +x /app/init-config.sh /app/docker-entrypoint-wrapper.sh
 
