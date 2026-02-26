@@ -1,18 +1,45 @@
-# 3x-ui Docker с автоконфигурацией
+# 3x-ui с автоконфигурацией
 
-Форк [3x-ui](https://github.com/MHSanaei/3x-ui) с поддержкой конфигурации через переменные окружения.
+Форк [3x-ui](https://github.com/MHSanaei/3x-ui) с поддержкой конфигурации через переменные окружения. Два варианта установки: **Docker** и **нативная** (systemd).
 
-## Быстрый старт
+## Быстрый старт (Docker)
+
+`.env` хранится в **корне проекта** рядом с `docker-compose.yml`.
 
 ```bash
-# 1. Создать .env из шаблона
 cp .env.example .env
-
-# 2. Отредактировать настройки
 nano .env
-
-# 3. Запустить
 sudo docker compose up -d --build
+```
+
+## Нативная установка (systemd, без Docker)
+
+Меньше потребление памяти (~20-40 МБ vs ~60-100 МБ в Docker).
+`.env` — **общий** для обоих вариантов (симлинк `/etc/x-ui/.env` → `.env` в проекте).
+
+```bash
+git clone https://github.com/Wasdalt/3x-ui.git && cd 3x-ui
+cp .env.example .env
+nano .env
+sudo bash native-install.sh
+```
+
+Скрипт автоматически:
+1. Установит 3x-ui через официальный установщик
+2. Создаст симлинк `/etc/x-ui/.env` → `.env` в проекте
+3. Настроит systemd на чтение `.env` при каждом старте
+4. Запустит `init-config.sh` перед каждым стартом панели
+5. Настроит certbot + cron для SSL
+
+**Применение изменений `.env`:**
+```bash
+nano .env                        # редактируешь в проекте
+sudo systemctl restart x-ui      # применяется автоматически
+```
+
+**Удаление .env-дополнений (оставляет 3x-ui):**
+```bash
+sudo bash native-uninstall.sh
 ```
 
 ## Основные переменные окружения
@@ -131,42 +158,61 @@ sudo docker compose --profile torrent up -d
 
 ## Применение изменений
 
-### Изменил только `.env`:
-```bash
-sudo docker compose up -d --force-recreate
-```
+### Docker
 
-### Изменил скрипты (`init-config.sh`, `docker-entrypoint-wrapper.sh` и др.):
-```bash
-sudo docker compose up -d --build
-```
+| Действие | Команда |
+|---|---|
+| Изменил `.env` | `sudo docker compose up -d --force-recreate` |
+| Изменил скрипты | `sudo docker compose up -d --build` |
+| Полный перезапуск | `sudo docker compose down && sudo docker compose up -d --build` |
+
+### Нативная (systemd)
+
+| Действие | Команда |
+|---|---|
+| Изменил `/etc/x-ui/.env` | `sudo systemctl restart x-ui` |
+| Обновил `init-config.sh` | `sudo bash native-install.sh` (перекопирует скрипт) |
 
 > **⚠️ Важно:**
-> - `docker compose restart` **НЕ перечитывает** `.env` — используйте `up -d --force-recreate`
+> - Docker: `docker compose restart` **НЕ перечитывает** `.env` — используйте `up -d --force-recreate`
 > - Значения из `.env` **имеют приоритет** над значениями в БД
-> - Если переменная не задана или закомментирована в `.env` — сохраняется значение из БД
+> - Если переменная не задана или закомментирована — сохраняется значение из БД
 
 ## Полезные команды
 
-```bash
-# Логи
-sudo docker logs 3xui_app -f
-
-# Настройки в БД
-sudo docker exec 3xui_app sqlite3 /etc/x-ui/x-ui.db "SELECT key, value FROM settings;"
-
-# Xray log section
-sudo docker exec 3xui_app cat /app/bin/config.json | jq .log
-
-# Сброс БД
-sudo rm -f db/x-ui.db && sudo docker compose down && sudo docker compose up -d
-```
-
-## Обновление
+### Docker
 
 ```bash
-git fetch upstream
-git merge upstream/main
-git push origin main
-sudo docker compose down && sudo docker compose up -d --build
+sudo docker logs 3xui_app -f                          # Логи
+sudo docker exec 3xui_app sqlite3 /etc/x-ui/x-ui.db \
+  "SELECT key, value FROM settings;"                   # Настройки в БД
 ```
+
+### Нативная
+
+```bash
+sudo journalctl -u x-ui -f                            # Логи
+sudo sqlite3 /etc/x-ui/x-ui.db \
+  "SELECT key, value FROM settings;"                   # Настройки в БД
+sudo systemctl status x-ui                             # Статус
+```
+
+## Очистка Docker
+
+```bash
+# Проверить что занимает место
+sudo docker ps -a                                      # Контейнеры
+sudo docker images                                     # Образы
+sudo docker volume ls                                  # Тома
+
+# Удалить неиспользуемые образы, контейнеры, тома
+sudo docker system prune -a --volumes
+
+# Удалить конкретный образ/том
+sudo docker image rm ИМЯ_ОБРАЗА
+sudo docker volume rm ИМЯ_ТОМА
+```
+
+> **⚠️ `prune -a --volumes`** удаляет **ВСЁ** неиспользуемое — образы, остановленные контейнеры, анонимные тома. Работающие контейнеры и их тома не затрагиваются.
+
+

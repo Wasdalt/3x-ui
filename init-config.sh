@@ -7,7 +7,7 @@
 
 set -e
 
-DB_PATH="/etc/x-ui/x-ui.db"
+DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
 
 # Wait for database creation / Ждём создания БД
 for i in $(seq 1 30); do
@@ -150,7 +150,7 @@ set_always "trafficDiff" "$XUI_TRAFFIC_DIFF"
 # Xray Logging / Логирование Xray (через БД / via database)
 # ============================================================================
 
-XRAY_CONFIG="/app/bin/config.json"
+XRAY_CONFIG="${XUI_XRAY_CONFIG:-/app/bin/config.json}"
 
 if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_XRAY_LOG_LEVEL" ]; then
     echo "Configuring Xray logging..."
@@ -196,6 +196,45 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
         else
             echo "[WARN] Could not read xrayTemplateConfig from DB"
         fi
+    fi
+fi
+
+# ============================================================================
+# Автовыпуск SSL сертификатов (только нативная установка)
+# ============================================================================
+
+if [ -n "$XUI_DOMAIN" ] && command -v certbot > /dev/null 2>&1; then
+    CERT_PATH="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+    
+    if [ ! -f "$CERT_PATH" ]; then
+        echo "[AUTO-CERT] Сертификат для ${XUI_DOMAIN} не найден, выпускаем..."
+        
+        CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
+        if [ -z "$CERTBOT_EMAIL" ]; then
+            echo "[AUTO-CERT] XUI_ADMIN_EMAIL не задан, используем --register-unsafely-without-email"
+            CERTBOT_FLAGS="--register-unsafely-without-email"
+        else
+            CERTBOT_FLAGS="--email ${CERTBOT_EMAIL} --no-eff-email"
+        fi
+        
+        # Пробуем standalone (порт 80 должен быть свободен)
+        certbot certonly --standalone --non-interactive --agree-tos \
+            ${CERTBOT_FLAGS} \
+            -d "${XUI_DOMAIN}" \
+            --preferred-challenges http 2>&1 && {
+            echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
+            
+            # Обновляем пути сертификатов в БД
+            CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+            KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
+            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
+            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
+            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${KEY_FILE}');"
+            echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
+        } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (порт 80 занят?)"
+    else
+        echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} уже существует"
     fi
 fi
 
