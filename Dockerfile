@@ -11,4 +11,10 @@ ARG CACHEBUST=1
 COPY init-config.sh docker-entrypoint-wrapper.sh /app/
 RUN chmod +x /app/init-config.sh /app/docker-entrypoint-wrapper.sh
 
+# Симлинки: ./access.log → shared volume /app/xray-logs/
+# Xray пишет в ./access.log, а файл попадает в shared volume для torrent/iplimit блокировщиков
+RUN mkdir -p /app/xray-logs && \
+    ln -sf /app/xray-logs/access.log /app/access.log && \
+    ln -sf /app/xray-logs/error.log /app/error.log
+
 ENTRYPOINT ["/app/docker-entrypoint-wrapper.sh"]

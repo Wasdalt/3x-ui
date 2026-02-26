@@ -70,14 +70,13 @@ EOF
     echo "✅ Fail2ban configured"
 fi
 
+# Apply environment configuration BEFORE panel starts
+# (so panel reads already-updated values from DB)
+/app/init-config.sh
+
 # Start original entrypoint in background
 /app/DockerEntrypoint.sh &
 PID=$!
-
-sleep 3
-
-# Apply environment configuration
-/app/init-config.sh
 
 # ============================================================================
 # Auto-request certificate if domain found but cert missing

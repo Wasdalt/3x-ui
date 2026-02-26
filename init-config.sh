@@ -119,6 +119,7 @@ fi
 # ============================================================================
 
 set_always "webPort" "$XUI_PORT"
+set_always "webDomain" "$XUI_DOMAIN"
 set_always "webCertFile" "$CERT_FILE"
 set_always "webKeyFile" "$KEY_FILE"
 set_always "webBasePath" "$XUI_BASE_PATH"

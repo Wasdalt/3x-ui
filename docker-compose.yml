@@ -9,7 +9,7 @@ services:
       # SSL сертификаты Let's Encrypt
       - /etc/letsencrypt:/etc/letsencrypt:ro
       # Xray access.log — shared volume для torrent/iplimit блокировщиков
-      - xray-logs:/app
+      - xray-logs:/app/xray-logs
       # Логи IP лимитов для iplimit-blocker  
       - /var/log:/var/log
     env_file:

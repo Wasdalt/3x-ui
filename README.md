@@ -133,15 +133,18 @@ sudo docker compose --profile torrent up -d
 
 ### Изменил только `.env`:
 ```bash
-sudo docker compose down && sudo docker compose up -d
+sudo docker compose up -d --force-recreate
 ```
 
-### Изменил скрипты:
+### Изменил скрипты (`init-config.sh`, `docker-entrypoint-wrapper.sh` и др.):
 ```bash
-sudo docker compose down && sudo docker compose build --build-arg CACHEBUST=$(date +%s) && sudo docker compose up -d
+sudo docker compose up -d --build
 ```
 
-> **Примечание:** `docker compose restart` НЕ перечитывает `.env`!
+> **⚠️ Важно:**
+> - `docker compose restart` **НЕ перечитывает** `.env` — используйте `up -d --force-recreate`
+> - Значения из `.env` **имеют приоритет** над значениями в БД
+> - Если переменная не задана или закомментирована в `.env` — сохраняется значение из БД
 
 ## Полезные команды
 
