@@ -48,12 +48,34 @@ echo -e "${green}  ✓ sqlite3, jq, certbot установлены${plain}"
 # ============================================================================
 echo -e "${yellow}[2/6] Установка 3x-ui...${plain}"
 
+# --- Бэкап существующей БД перед установкой ---
+DB_BACKUP=""
+DB_PATH="${XUI_CONFIG_DIR}/x-ui.db"
+DOCKER_DB_PATH="${SCRIPT_DIR}/db/x-ui.db"
+
+if [ -f "$DB_PATH" ]; then
+    DB_BACKUP="/tmp/x-ui.db.backup.$(date +%s)"
+    cp "$DB_PATH" "$DB_BACKUP"
+    echo -e "${green}  ✓ Бэкап БД: ${DB_BACKUP}${plain}"
+elif [ -f "$DOCKER_DB_PATH" ]; then
+    DB_BACKUP="/tmp/x-ui.db.backup.$(date +%s)"
+    cp "$DOCKER_DB_PATH" "$DB_BACKUP"
+    echo -e "${green}  ✓ Бэкап БД (из Docker): ${DB_BACKUP}${plain}"
+fi
+
 if [ -f "${XUI_DIR}/x-ui" ]; then
     echo -e "${green}  ✓ 3x-ui уже установлен, пропускаем${plain}"
 else
     echo -e "  Запуск оригинального установщика..."
     bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
     echo -e "${green}  ✓ 3x-ui установлен${plain}"
+fi
+
+# --- Восстановление БД после установки ---
+if [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
+    cp "$DB_BACKUP" "$DB_PATH"
+    echo -e "${green}  ✓ БД восстановлена из бэкапа${plain}"
+    rm -f "$DB_BACKUP"
 fi
 
 # ============================================================================
