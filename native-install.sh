@@ -18,6 +18,7 @@ XUI_DIR="/usr/local/x-ui"
 XUI_CONFIG_DIR="/etc/x-ui"
 XUI_ENV_FILE="${XUI_CONFIG_DIR}/.env"
 XUI_SERVICE="/etc/systemd/system/x-ui.service"
+XUI_BUNDLED_SERVICE="${XUI_DIR}/x-ui.service"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CERTBOT_HELPER="${SCRIPT_DIR}/certbot-domain.sh"
 XUI_FORK_CLI="/usr/bin/x-ui-fork"
@@ -151,8 +152,27 @@ fi
 echo -e "${yellow}[5/6] Настройка systemd-сервиса...${plain}"
 
 if [ ! -f "${XUI_SERVICE}" ]; then
-    echo -e "${red}  ✗ Файл ${XUI_SERVICE} не найден${plain}"
-    exit 1
+    if [ -f "${XUI_BUNDLED_SERVICE}" ]; then
+        cp "${XUI_BUNDLED_SERVICE}" "${XUI_SERVICE}"
+        echo -e "${green}  ✓ systemd-сервис создан из ${XUI_BUNDLED_SERVICE}${plain}"
+    else
+        cat > "${XUI_SERVICE}" <<EOF
+[Unit]
+Description=x-ui Service
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+WorkingDirectory=${XUI_DIR}
+ExecStart=${XUI_DIR}/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        echo -e "${green}  ✓ systemd-сервис создан: ${XUI_SERVICE}${plain}"
+    fi
 fi
 
 # Бэкап оригинала
