@@ -107,6 +107,10 @@ if [ -f "${SCRIPT_DIR}/fork-sync.sh" ]; then
     cp -f "${SCRIPT_DIR}/fork-sync.sh" "${XUI_DIR}/fork-sync.sh"
     chmod +x "${XUI_DIR}/fork-sync.sh"
 fi
+if [ -f "${SCRIPT_DIR}/fork-db-apply.sh" ]; then
+    cp -f "${SCRIPT_DIR}/fork-db-apply.sh" "${XUI_DIR}/fork-db-apply.sh"
+    chmod +x "${XUI_DIR}/fork-db-apply.sh"
+fi
 if [ -f "${CERTBOT_HELPER}" ]; then
     cp -f "${CERTBOT_HELPER}" "${XUI_DIR}/certbot-domain.sh"
     chmod +x "${XUI_DIR}/certbot-domain.sh"
@@ -214,6 +218,36 @@ fi
 
 systemctl daemon-reload
 echo -e "${green}  ✓ systemd перезагружен${plain}"
+
+if [ -x "${XUI_DIR}/fork-db-apply.sh" ]; then
+    cat > /etc/systemd/system/x-ui-fork-db-apply.service <<EOF
+[Unit]
+Description=Apply x-ui fork DB/env configuration
+After=x-ui.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-${XUI_ENV_FILE}
+Environment=XUI_XRAY_CONFIG=${XUI_DIR}/bin/config.json
+ExecStart=${XUI_DIR}/fork-db-apply.sh
+EOF
+
+    cat > /etc/systemd/system/x-ui-fork-db-apply.path <<EOF
+[Unit]
+Description=Watch x-ui database changes for fork configuration
+
+[Path]
+PathChanged=${XUI_CONFIG_DIR}/x-ui.db
+Unit=x-ui-fork-db-apply.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
+    echo -e "${green}  ✓ DB apply path включён${plain}"
+fi
 
 # ============================================================================
 # 6. Настройка certbot и автообновления сертификатов
