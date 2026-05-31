@@ -54,7 +54,7 @@ Usage: x-ui-fork <command>
 
 Commands:
   menu      Open official author x-ui menu
-  apply     Apply fork native overlay (.env, init-config, certbot hooks)
+  apply     Apply fork overlay only (.env, init-config, systemd hooks)
   update    Update official 3x-ui, then reapply fork overlay
   restart   Restart x-ui systemd service
   url       Print current panel URL from DB
@@ -74,8 +74,11 @@ case "${1:-help}" in
         ;;
     apply)
         need_root
+        if [ -f "${PROJECT_DIR}/native-apply.sh" ]; then
+            exec bash "${PROJECT_DIR}/native-apply.sh"
+        fi
         if [ ! -f "${PROJECT_DIR}/native-install.sh" ]; then
-            echo -e "${red}native-install.sh не найден: ${PROJECT_DIR}${plain}"
+            echo -e "${red}native-apply.sh/native-install.sh не найдены: ${PROJECT_DIR}${plain}"
             exit 1
         fi
         exec bash "${PROJECT_DIR}/native-install.sh"

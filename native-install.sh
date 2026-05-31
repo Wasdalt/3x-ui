@@ -103,6 +103,10 @@ echo -e "${yellow}[3/6] Настройка init-config.sh...${plain}"
 cp -f "${SCRIPT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
 chmod +x "${XUI_DIR}/init-config.sh"
 mkdir -p "${XUI_CONFIG_DIR}"
+if [ -f "${SCRIPT_DIR}/fork-sync.sh" ]; then
+    cp -f "${SCRIPT_DIR}/fork-sync.sh" "${XUI_DIR}/fork-sync.sh"
+    chmod +x "${XUI_DIR}/fork-sync.sh"
+fi
 if [ -f "${CERTBOT_HELPER}" ]; then
     cp -f "${CERTBOT_HELPER}" "${XUI_DIR}/certbot-domain.sh"
     chmod +x "${XUI_DIR}/certbot-domain.sh"
@@ -197,6 +201,15 @@ fi
 if ! grep -q "init-config.sh" "${XUI_SERVICE}"; then
     sed -i "/^ExecStart=/i ExecStartPre=${XUI_DIR}/init-config.sh" "${XUI_SERVICE}"
     echo -e "${green}  ✓ ExecStartPre добавлен${plain}"
+fi
+
+if [ -f "${XUI_DIR}/fork-sync.sh" ] && ! grep -q "${XUI_DIR}/fork-sync.sh" "${XUI_SERVICE}"; then
+    if grep -q "^ExecStartPre=.*init-config.sh" "${XUI_SERVICE}"; then
+        sed -i "\|^ExecStartPre=.*init-config.sh|i ExecStartPre=${XUI_DIR}/fork-sync.sh" "${XUI_SERVICE}"
+    else
+        sed -i "/^ExecStart=/i ExecStartPre=${XUI_DIR}/fork-sync.sh" "${XUI_SERVICE}"
+    fi
+    echo -e "${green}  ✓ Fork sync ExecStartPre добавлен${plain}"
 fi
 
 systemctl daemon-reload
