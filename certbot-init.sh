@@ -10,6 +10,7 @@ set -e
 PANEL_DOMAIN="${XUI_DOMAIN:-}"
 SUB_DOMAIN="${XUI_SUB_DOMAIN:-}"
 EMAIL="${XUI_ADMIN_EMAIL:-admin@$PANEL_DOMAIN}"
+DEPLOY_HOOK="${XUI_CERTBOT_DEPLOY_HOOK:-}"
 
 echo "🔐 SSL Auto-setup"
 echo "   Panel: ${PANEL_DOMAIN:-not set}"
@@ -69,6 +70,14 @@ get_cert() {
     fi
 }
 
+renew_certs() {
+    if [ -n "$DEPLOY_HOOK" ]; then
+        certbot renew --standalone --quiet --deploy-hook "$DEPLOY_HOOK" || true
+    else
+        certbot renew --standalone --quiet || true
+    fi
+}
+
 if [ -z "$PANEL_DOMAIN" ] || [ "$PANEL_DOMAIN" = "localhost" ]; then
     echo "⚠️  XUI_DOMAIN not set"
     
@@ -93,7 +102,7 @@ fi
 echo "🔄 Starting renewal loop..."
 trap exit TERM
 while :; do
-    certbot renew --standalone --quiet || true
+    renew_certs
     sleep 12h &
     wait
 done

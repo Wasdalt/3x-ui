@@ -6,6 +6,11 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CERTBOT_HELPER="${SCRIPT_DIR}/certbot-domain.sh"
+
+[ -f "$CERTBOT_HELPER" ] && . "$CERTBOT_HELPER"
+
 DOMAIN=${1:-$XUI_DOMAIN}
 EMAIL=${2:-admin@$DOMAIN}
 
@@ -20,21 +25,31 @@ echo "📧 Email: $EMAIL"
 echo ""
 
 # Проверяем, не запущен ли уже сервис на порту 80
-if netstat -tuln | grep -q ':80 '; then
+if command -v netstat >/dev/null 2>&1 && netstat -tuln | grep -q ':80 '; then
     echo "⚠️  Порт 80 занят. Остановите сервис или используйте --webroot"
     echo "   Пробуем с --standalone и --preferred-challenges http..."
 fi
 
 # Получаем сертификат
-sudo certbot certonly \
-    --standalone \
-    --non-interactive \
-    --agree-tos \
-    --email "$EMAIL" \
-    -d "$DOMAIN" \
-    --preferred-challenges http
+if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+    if sudo XUI_CERTBOT_DOMAIN="$DOMAIN" XUI_CERTBOT_EMAIL="$EMAIL" XUI_CERTBOT_HELPER="$CERTBOT_HELPER" sh -c '. "$XUI_CERTBOT_HELPER"; certbot_issue_domain_cert "$XUI_CERTBOT_DOMAIN" "$XUI_CERTBOT_EMAIL"; certbot_configure_auto_renewal'; then
+        CERT_OK=1
+    else
+        CERT_OK=0
+    fi
+elif sudo certbot certonly \
+        --standalone \
+        --non-interactive \
+        --agree-tos \
+        --email "$EMAIL" \
+        -d "$DOMAIN" \
+        --preferred-challenges http; then
+    CERT_OK=1
+else
+    CERT_OK=0
+fi
 
-if [ $? -eq 0 ]; then
+if [ "$CERT_OK" -eq 1 ]; then
     echo ""
     echo "✅ Сертификат успешно получен!"
     echo ""
@@ -47,8 +62,9 @@ if [ $? -eq 0 ]; then
     echo "   XUI_CERT_FILE=/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
     echo "   XUI_KEY_FILE=/etc/letsencrypt/live/$DOMAIN/privkey.pem"
     echo ""
-    echo "🚀 Затем перезапустите контейнер:"
-    echo "   sudo docker-compose down && sudo docker-compose up -d --build"
+    echo "🚀 Затем перезапустите панель:"
+    echo "   sudo systemctl restart x-ui"
+    echo "   # или Docker: sudo docker compose up -d --build"
 else
     echo "❌ Ошибка получения сертификата"
     exit 1

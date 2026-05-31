@@ -19,6 +19,23 @@ XUI_CONFIG_DIR="/etc/x-ui"
 XUI_ENV_FILE="${XUI_CONFIG_DIR}/.env"
 XUI_SERVICE="/etc/systemd/system/x-ui.service"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CERTBOT_HELPER="${SCRIPT_DIR}/certbot-domain.sh"
+XUI_FORK_CLI="/usr/bin/x-ui-fork"
+XUI_FORK_PROJECT_FILE="${XUI_CONFIG_DIR}/fork-project-dir"
+DB_PATH="${XUI_CONFIG_DIR}/x-ui.db"
+DB_BACKUP=""
+INSTALL_DONE=0
+
+restore_db_backup_on_error() {
+    if [ "$INSTALL_DONE" -ne 1 ] && [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
+        mkdir -p "$XUI_CONFIG_DIR"
+        cp "$DB_BACKUP" "$DB_PATH"
+        rm -f "$DB_BACKUP"
+        echo -e "${yellow}  ⚠ Ошибка установки, БД восстановлена из бэкапа${plain}"
+    fi
+}
+
+trap restore_db_backup_on_error EXIT
 
 echo -e "${green}============================================================================${plain}"
 echo -e "${green}  3x-ui Нативная установка с .env конфигурацией${plain}"
@@ -49,8 +66,6 @@ echo -e "${green}  ✓ sqlite3, jq, certbot установлены${plain}"
 echo -e "${yellow}[2/6] Установка 3x-ui...${plain}"
 
 # --- Бэкап существующей БД перед установкой ---
-DB_BACKUP=""
-DB_PATH="${XUI_CONFIG_DIR}/x-ui.db"
 DOCKER_DB_PATH="${SCRIPT_DIR}/db/x-ui.db"
 
 if [ -f "$DB_PATH" ]; then
@@ -76,6 +91,7 @@ if [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
     cp "$DB_BACKUP" "$DB_PATH"
     echo -e "${green}  ✓ БД восстановлена из бэкапа${plain}"
     rm -f "$DB_BACKUP"
+    DB_BACKUP=""
 fi
 
 # ============================================================================
@@ -85,6 +101,19 @@ echo -e "${yellow}[3/6] Настройка init-config.sh...${plain}"
 
 cp -f "${SCRIPT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
 chmod +x "${XUI_DIR}/init-config.sh"
+mkdir -p "${XUI_CONFIG_DIR}"
+if [ -f "${CERTBOT_HELPER}" ]; then
+    cp -f "${CERTBOT_HELPER}" "${XUI_DIR}/certbot-domain.sh"
+    chmod +x "${XUI_DIR}/certbot-domain.sh"
+fi
+if [ -f "${SCRIPT_DIR}/native-update.sh" ]; then
+    chmod +x "${SCRIPT_DIR}/native-update.sh"
+fi
+if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
+    cp -f "${SCRIPT_DIR}/x-ui-fork.sh" "${XUI_FORK_CLI}"
+    chmod +x "${XUI_FORK_CLI}"
+    echo "${SCRIPT_DIR}" > "${XUI_FORK_PROJECT_FILE}"
+fi
 mkdir -p "${XUI_DIR}/xray-logs"
 echo -e "${green}  ✓ init-config.sh скопирован в ${XUI_DIR}/${plain}"
 
@@ -154,34 +183,30 @@ systemctl daemon-reload
 echo -e "${green}  ✓ systemd перезагружен${plain}"
 
 # ============================================================================
-# 6. Настройка certbot cron
+# 6. Настройка certbot и автообновления сертификатов
 # ============================================================================
 echo -e "${yellow}[6/6] Настройка certbot...${plain}"
 
-# Читаем домен из .env
+# Читаем домен из .env, а при восстановлении бэкапа — из БД панели
 XUI_DOMAIN=$(grep "^XUI_DOMAIN=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
 XUI_ADMIN_EMAIL=$(grep "^XUI_ADMIN_EMAIL=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
 
-if [ -n "$XUI_DOMAIN" ] && [ -n "$XUI_ADMIN_EMAIL" ]; then
-    CERT_PATH="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-    if [ ! -f "$CERT_PATH" ]; then
-        echo -e "  Получение сертификата для ${XUI_DOMAIN}..."
-        certbot certonly --standalone --non-interactive --agree-tos \
-            --email "${XUI_ADMIN_EMAIL}" \
-            -d "${XUI_DOMAIN}" \
-            --preferred-challenges http || echo -e "${yellow}  ⚠ Не удалось получить сертификат (порт 80 занят?)${plain}"
-    else
-        echo -e "${green}  ✓ Сертификат уже существует${plain}"
-    fi
+if [ -z "$XUI_DOMAIN" ] && [ -f "$DB_PATH" ]; then
+    XUI_DOMAIN=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+    [ -n "$XUI_DOMAIN" ] && echo -e "${green}  ✓ Домен взят из БД: ${XUI_DOMAIN}${plain}"
+fi
 
-    # Cron для обновления каждые 12 часов
-    CRON_CMD="0 */12 * * * certbot renew --quiet --deploy-hook 'systemctl restart x-ui'"
-    (crontab -l 2>/dev/null | grep -v "certbot renew"; echo "$CRON_CMD") | crontab -
-    echo -e "${green}  ✓ Cron для обновления сертификатов настроен${plain}"
+if [ -f "${CERTBOT_HELPER}" ]; then
+    . "${CERTBOT_HELPER}"
+    certbot_configure_auto_renewal || true
+
+    if [ -n "$XUI_DOMAIN" ]; then
+        certbot_issue_domain_cert "$XUI_DOMAIN" "$XUI_ADMIN_EMAIL" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_DOMAIN} (DNS/порт 80?)${plain}"
+    else
+        echo -e "${yellow}  ⚠ Домен не найден в .env или БД, выпуск сертификата пропущен${plain}"
+    fi
 else
-    echo -e "${yellow}  ⚠ XUI_DOMAIN или XUI_ADMIN_EMAIL не заданы, certbot пропущен${plain}"
-    echo -e "${yellow}  Задайте их в ${XUI_ENV_FILE} и запустите:${plain}"
-    echo -e "${yellow}  certbot certonly --standalone -d ДОМЕН --email EMAIL${plain}"
+    echo -e "${yellow}  ⚠ ${CERTBOT_HELPER} не найден, certbot пропущен${plain}"
 fi
 
 # ============================================================================
@@ -190,6 +215,18 @@ fi
 echo ""
 systemctl restart x-ui
 sleep 2
+
+if systemctl is-active --quiet x-ui && [ -f "$DB_PATH" ]; then
+    PORT_VALUE=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "")
+    BASE_PATH_VALUE=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || echo "")
+
+    if [ -z "$PORT_VALUE" ] || [ -z "$BASE_PATH_VALUE" ]; then
+        echo -e "${yellow}  Автогенерация недостающих настроек панели...${plain}"
+        "${XUI_DIR}/init-config.sh" || true
+        systemctl restart x-ui
+        sleep 2
+    fi
+fi
 
 if systemctl is-active --quiet x-ui; then
     echo -e "${green}============================================================================${plain}"
@@ -200,10 +237,22 @@ if systemctl is-active --quiet x-ui; then
     PORT=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "2053")
     BASE_PATH=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || echo "/")
     DOMAIN=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "localhost")
+
+    [ -n "$PORT" ] || PORT="2053"
+    [ -n "$BASE_PATH" ] || BASE_PATH="/"
+    [ -n "$DOMAIN" ] || DOMAIN="localhost"
     
-    echo -e "  📍 Панель: https://${DOMAIN}:${PORT}${BASE_PATH}"
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+        echo -e "  📍 Панель: https://${DOMAIN}:${PORT}${BASE_PATH}"
+    else
+        echo -e "  📍 Панель: http://server-ip:${PORT}${BASE_PATH}"
+        echo -e "  🔒 SSH tunnel: ssh -N -L 8080:localhost:${PORT} user@server-ip"
+        echo -e "  🌐 Локально через tunnel: http://localhost:8080${BASE_PATH}"
+    fi
     echo -e ""
     echo -e "  Конфигурация: ${yellow}${XUI_ENV_FILE}${plain}"
+    echo -e "  Единый CLI: ${yellow}x-ui-fork help${plain}"
+    echo -e "  Обновить upstream + fork: ${yellow}x-ui-fork update${plain}"
     echo -e "  Применить изменения: ${yellow}systemctl restart x-ui${plain}"
     echo -e "  Логи: ${yellow}journalctl -u x-ui -f${plain}"
     echo -e ""
@@ -211,3 +260,5 @@ else
     echo -e "${red}  ✗ 3x-ui не запустился. Проверьте: journalctl -u x-ui -e${plain}"
     exit 1
 fi
+
+INSTALL_DONE=1

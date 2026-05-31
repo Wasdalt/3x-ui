@@ -8,6 +8,12 @@
 set -e
 
 DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+CERTBOT_HELPER="${XUI_CERTBOT_HELPER:-${SCRIPT_DIR}/certbot-domain.sh}"
+
+if [ -r "$CERTBOT_HELPER" ]; then
+    . "$CERTBOT_HELPER"
+fi
 
 # Wait for database creation / Ждём создания БД
 for i in $(seq 1 30); do
@@ -49,6 +55,82 @@ set_if_empty() {
     fi
 }
 
+get_setting_value() {
+    sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='$1';" 2>/dev/null || echo ""
+}
+
+random_uint16() {
+    od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' '
+}
+
+random_hex() {
+    od -An -N9 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+}
+
+port_is_available() {
+    port=$1
+
+    case "$port" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+
+    if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
+        return 1
+    fi
+
+    if sqlite3 "$DB_PATH" "SELECT 1 FROM inbounds WHERE port='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
+        return 1
+    fi
+
+    if sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key IN ('webPort','subPort') AND value='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
+        return 1
+    fi
+
+    if [ -n "$XUI_SUB_PORT" ] && [ "$XUI_SUB_PORT" = "$port" ]; then
+        return 1
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ! ss -H -lntu "sport = :$port" 2>/dev/null | grep -q .
+        return $?
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        ! netstat -tuln 2>/dev/null | grep -E "(^|[.:])${port}[[:space:]]" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 0
+}
+
+generate_panel_port() {
+    for i in $(seq 1 50); do
+        number=$(random_uint16)
+        [ -n "$number" ] || number=$((i * 997))
+        port=$((40000 + number % 20000))
+        if port_is_available "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+
+    for port in 50550 51050 52050 53050 54050 55050 56050 57050 58050 59050; do
+        if port_is_available "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+generate_base_path() {
+    token=$(random_hex)
+    [ -n "$token" ] || token="$(date +%s)$$"
+    echo "/${token}/"
+}
+
 # ============================================================================
 # Admin Credentials / Учётные данные администратора
 # ============================================================================
@@ -76,9 +158,9 @@ fi
 # Domain Detection / Определение домена
 # ============================================================================
 
-# If XUI_DOMAIN empty - try to get from DB (for backups)
+# If XUI_DOMAIN empty - try to get panel domain from DB (for backups)
 if [ -z "$XUI_DOMAIN" ]; then
-    DB_DOMAIN=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='subDomain';" 2>/dev/null || echo "")
+    DB_DOMAIN=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
     if [ -n "$DB_DOMAIN" ]; then
         echo "[AUTO] Domain from database: $DB_DOMAIN"
         XUI_DOMAIN="$DB_DOMAIN"
@@ -111,6 +193,26 @@ else
         SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
         SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
     fi
+fi
+
+
+# ============================================================================
+# Generated Fallbacks / Автогенерация безопасных локальных значений
+# ============================================================================
+
+if [ -z "$XUI_PORT" ] && [ -z "$(get_setting_value webPort)" ]; then
+    if GENERATED_PORT=$(generate_panel_port); then
+        set_if_empty "webPort" "$GENERATED_PORT"
+        echo "[AUTO] Generated free panel port: $GENERATED_PORT"
+    else
+        echo "[WARN] Could not find a free generated panel port"
+    fi
+fi
+
+if [ -z "$XUI_BASE_PATH" ] && [ -z "$(get_setting_value webBasePath)" ]; then
+    GENERATED_BASE_PATH=$(generate_base_path)
+    set_if_empty "webBasePath" "$GENERATED_BASE_PATH"
+    echo "[AUTO] Generated panel base path: $GENERATED_BASE_PATH"
 fi
 
 
@@ -171,29 +273,38 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
         
         if [ -z "$EXISTING" ]; then
             echo "[DB] Creating xrayTemplateConfig from config.json..."
-            CONFIG_CONTENT=$(cat "$XRAY_CONFIG")
-            ESCAPED_CONFIG=$(echo "$CONFIG_CONTENT" | sed "s/'/''/g")
+            ESCAPED_CONFIG=$(sed "s/'/''/g" "$XRAY_CONFIG")
             sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
         fi
         
-        # Get current config from DB
-        CURRENT_CONFIG=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null || echo "")
+        TMP_JSON=$(mktemp)
+        # Dump directly from DB to file to avoid bash variable expansion issues
+        sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
         
-        if [ -n "$CURRENT_CONFIG" ]; then
-            NEW_CONFIG="$CURRENT_CONFIG"
-            
+        if [ -s "$TMP_JSON" ]; then
+            if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
+                echo "[WARN] Invalid xrayTemplateConfig in DB, rebuilding from config.json"
+                ESCAPED_CONFIG=$(sed "s/'/''/g" "$XRAY_CONFIG")
+                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+                cp "$XRAY_CONFIG" "$TMP_JSON"
+            fi
+
             # Apply log settings using jq
-            [ -n "$XUI_XRAY_ACCESS_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val')
-            [ -n "$XUI_XRAY_ERROR_LOG" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val')
-            [ -n "$XUI_XRAY_LOG_LEVEL" ] && NEW_CONFIG=$(echo "$NEW_CONFIG" | jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val')
+            [ -n "$XUI_XRAY_ACCESS_LOG" ] && jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+            [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+            [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
             
-            # Save to DB and config.json
-            ESCAPED_NEW=$(echo "$NEW_CONFIG" | sed "s/'/''/g")
+            # Save to config.json formatted
+            jq . "$TMP_JSON" > "$XRAY_CONFIG"
+            
+            # Save back to DB (escaping single quotes for sqlite)
+            ESCAPED_NEW=$(sed "s/'/''/g" "$TMP_JSON")
             sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
-            echo "$NEW_CONFIG" | jq . > "$XRAY_CONFIG"
             
+            rm -f "$TMP_JSON"
             echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
         else
+            rm -f "$TMP_JSON"
             echo "[WARN] Could not read xrayTemplateConfig from DB"
         fi
     fi
@@ -205,34 +316,60 @@ fi
 
 if [ -n "$XUI_DOMAIN" ] && command -v certbot > /dev/null 2>&1; then
     CERT_PATH="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-    
+
     if [ ! -f "$CERT_PATH" ]; then
         echo "[AUTO-CERT] Сертификат для ${XUI_DOMAIN} не найден, выпускаем..."
-        
-        CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
-        if [ -z "$CERTBOT_EMAIL" ]; then
-            echo "[AUTO-CERT] XUI_ADMIN_EMAIL не задан, используем --register-unsafely-without-email"
-            CERTBOT_FLAGS="--register-unsafely-without-email"
+
+        if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+            certbot_issue_domain_cert "${XUI_DOMAIN}" "${XUI_ADMIN_EMAIL:-}" && {
+                echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
+
+                # Обновляем пути сертификатов в БД
+                CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+                KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
+                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
+                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
+                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${KEY_FILE}');"
+                echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
+            } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
         else
-            CERTBOT_FLAGS="--email ${CERTBOT_EMAIL} --no-eff-email"
+            CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
+            if [ -z "$CERTBOT_EMAIL" ]; then
+                echo "[AUTO-CERT] XUI_ADMIN_EMAIL не задан, используем --register-unsafely-without-email"
+                certbot certonly --standalone --non-interactive --agree-tos \
+                    --register-unsafely-without-email \
+                    -d "${XUI_DOMAIN}" \
+                    --preferred-challenges http 2>&1 && {
+                    echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
+
+                    # Обновляем пути сертификатов в БД
+                    CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+                    KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${CERT_FILE}');"
+                    echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
+                } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
+            else
+                certbot certonly --standalone --non-interactive --agree-tos \
+                    --email "$CERTBOT_EMAIL" --no-eff-email \
+                    -d "${XUI_DOMAIN}" \
+                    --preferred-challenges http 2>&1 && {
+                    echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
+
+                    # Обновляем пути сертификатов в БД
+                    CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+                    KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
+                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${CERT_FILE}');"
+                    echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
+                } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
+            fi
         fi
-        
-        # Пробуем standalone (порт 80 должен быть свободен)
-        certbot certonly --standalone --non-interactive --agree-tos \
-            ${CERTBOT_FLAGS} \
-            -d "${XUI_DOMAIN}" \
-            --preferred-challenges http 2>&1 && {
-            echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
-            
-            # Обновляем пути сертификатов в БД
-            CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-            KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
-            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
-            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
-            sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${KEY_FILE}');"
-            echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
-        } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (порт 80 занят?)"
     else
         echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} уже существует"
     fi

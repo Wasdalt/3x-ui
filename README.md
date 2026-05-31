@@ -19,23 +19,37 @@ sudo docker compose up -d --build
 
 ```bash
 git clone https://github.com/Wasdalt/3x-ui.git && cd 3x-ui
-cp .env.example .env
-nano .env
+cp .env.example .env        # опционально: можно оставить пустым и дать скрипту сгенерировать локальные значения
+nano .env                   # опционально: домен, порт, логирование, админ и т.д.
 sudo bash native-install.sh
 ```
 
 Скрипт автоматически:
-1. Установит 3x-ui через официальный установщик
-2. Создаст симлинк `/etc/x-ui/.env` → `.env` в проекте
-3. Настроит systemd на чтение `.env` при каждом старте
-4. Запустит `init-config.sh` перед каждым стартом панели
-5. Настроит certbot + cron для SSL
+1. Устанавливает официальный 3x-ui, если он ещё не установлен.
+2. Делает бэкап БД перед установкой/обновлением и восстанавливает его при ошибке.
+3. Создаёт симлинк `/etc/x-ui/.env` → `.env` в проекте.
+4. Настраивает systemd на чтение `.env` при каждом старте.
+5. Запускает `init-config.sh` перед каждым стартом панели.
+6. Копирует fork-обвязку в `/usr/local/x-ui/` и ставит единый CLI `x-ui-fork`.
+7. Настраивает certbot + автообновление сертификатов через `certbot.timer` или cron fallback.
 
 **Применение изменений `.env`:**
 ```bash
 nano .env                        # редактируешь в проекте
 sudo systemctl restart x-ui      # применяется автоматически
 ```
+
+**Единый CLI для upstream + fork:**
+```bash
+sudo x-ui-fork menu      # открыть официальное меню автора
+sudo x-ui-fork apply     # применить fork-обвязку (.env/init-config/certbot)
+sudo x-ui-fork update    # обновить официальный 3x-ui и снова применить fork
+sudo x-ui-fork restart   # перезапустить systemd-сервис x-ui
+x-ui-fork url            # показать текущий URL панели из БД
+x-ui-fork env            # показать путь активного .env
+```
+
+> Для обновлений на сервере используйте `sudo x-ui-fork update`, а не обычный `x-ui update`: команда обновит официальный 3x-ui и затем заново применит fork-слой.
 
 **Удаление .env-дополнений (оставляет 3x-ui):**
 ```bash
@@ -46,10 +60,10 @@ sudo bash native-uninstall.sh
 
 | Переменная | Описание | По умолчанию |
 |------------|----------|--------------|
-| `XUI_PORT` | Порт панели (HTTPS) | `2053` |
-| `XUI_DOMAIN` | Домен для SSL | — |
-| `XUI_ADMIN_EMAIL` | Email для Let's Encrypt | — |
-| `XUI_BASE_PATH` | Базовый путь панели | `/` |
+| `XUI_PORT` | Порт панели (HTTPS); если пусто и БД пустая, генерируется свободный порт `40000-59999` | авто/`2053` |
+| `XUI_DOMAIN` | Домен панели для HTTPS. Если пусто, берётся только `webDomain` из БД | — |
+| `XUI_ADMIN_EMAIL` | Email для Let's Encrypt. Если пусто, используется регистрация certbot без email | — |
+| `XUI_BASE_PATH` | Базовый путь панели; если пусто и БД пустая, генерируется скрытый путь | авто/`/` |
 | `XUI_ADMIN_USERNAME` | Логин администратора | — |
 | `XUI_ADMIN_PASSWORD` | Пароль администратора | — |
 
@@ -83,46 +97,75 @@ sudo bash native-uninstall.sh
 
 ## Как это работает
 
-1. При запуске контейнера выполняется `init-config.sh`
-2. Скрипт читает переменные окружения и записывает их в БД `/etc/x-ui/x-ui.db`
-3. Если `xrayTemplateConfig` не существует — создаётся из `config.json`
-4. Применяются настройки логов Xray через jq
-5. Панель стартует с применёнными настройками
+1. При старте native-сервиса systemd читает `/etc/x-ui/.env`.
+2. Перед запуском панели выполняется `/usr/local/x-ui/init-config.sh`.
+3. Скрипт применяет заданные переменные окружения в БД `/etc/x-ui/x-ui.db`.
+4. Если `XUI_PORT` пустой и `webPort` в БД пустой, генерируется свободный порт и записывается только в БД.
+5. Если `XUI_BASE_PATH` пустой и `webBasePath` в БД пустой, генерируется скрытый путь и записывается только в БД.
+6. Если `XUI_DOMAIN` пустой, домен берётся только из `webDomain` в БД.
+7. Если домена нет ни в `.env`, ни в `webDomain`, SSL-сертификат не выпускается.
+8. Если `xrayTemplateConfig` не существует, он создаётся из `config.json`.
+9. Применяются настройки логов Xray через `jq`.
+10. Панель стартует с применёнными настройками.
+
+Значения из `.env` имеют приоритет над БД. Если переменная не задана или закомментирована, сохраняется значение из БД.
 
 ## SSL сертификаты
 
-Сертификаты Let's Encrypt получаются **автоматически** при запуске, если указан `XUI_DOMAIN` и `XUI_ADMIN_EMAIL`.
+Сертификаты Let's Encrypt получаются автоматически, если есть домен в `XUI_DOMAIN` или `webDomain` в БД.
 
-Контейнер `certbot` проверяет и обновляет сертификаты каждые 12 часов.
+Домен для панели берётся только из:
+```text
+XUI_DOMAIN -> webDomain
+```
+
+`subDomain` не используется как fallback для домена панели.
+
+В native-режиме устанавливается deploy-hook:
+```text
+/etc/letsencrypt/renewal-hooks/deploy/restart-x-ui.sh
+```
+
+После успешного `certbot renew` hook перезапускает `x-ui`, чтобы панель подхватила новый сертификат.
+
+Автообновление работает через системный `certbot.timer`. Если timer недоступен, используется cron fallback с запуском `certbot renew --quiet` каждые 12 часов.
+
+Docker-режим использует контейнер `certbot`, который запускает renew loop каждые 12 часов.
 
 ### Ручное получение (если автоматика не сработала)
 
 ```bash
-sudo docker compose down
 sudo ./ssl-setup.sh yourdomain.com admin@yourdomain.com
-sudo docker compose up -d
+sudo systemctl restart x-ui
 ```
 
 ## Доступ к панели
 
 ### Через домен (рекомендуется)
 ```
-https://yourdomain.com:2053/
+https://yourdomain.com:<webPort><webBasePath>
+```
+
+Текущий URL можно вывести из БД:
+```bash
+x-ui-fork url
 ```
 
 ### SSH туннель (без домена)
 ```bash
 # На локальном компьютере
-ssh -N -L 8080:localhost:2053 user@server-ip
+ssh -N -L 8080:localhost:<webPort> user@server-ip
 ```
-Затем: `http://localhost:8080`
+Затем: `http://localhost:8080<webBasePath>`
 
 ### HTTP по IP (небезопасно!)
 В `.env`:
 ```env
 XUI_ALLOW_HTTP=true
 ```
-Затем: `http://server-ip:2053`
+Затем: `http://server-ip:<webPort><webBasePath>`
+
+Если `.env` и БД пустые, native-установщик сгенерирует свободный `webPort` и скрытый `webBasePath`, а затем покажет URL в консоли.
 
 ## Защита IP лимитов
 
@@ -170,13 +213,16 @@ sudo docker compose --profile torrent up -d
 
 | Действие | Команда |
 |---|---|
-| Изменил `/etc/x-ui/.env` | `sudo systemctl restart x-ui` |
-| Обновил `init-config.sh` | `sudo bash native-install.sh` (перекопирует скрипт) |
+| Изменил `.env` | `sudo systemctl restart x-ui` |
+| Обновил fork-скрипты | `sudo x-ui-fork apply` |
+| Обновить официальный 3x-ui + fork-слой | `sudo x-ui-fork update` |
+| Показать URL панели | `x-ui-fork url` |
 
 > **⚠️ Важно:**
 > - Docker: `docker compose restart` **НЕ перечитывает** `.env` — используйте `up -d --force-recreate`
 > - Значения из `.env` **имеют приоритет** над значениями в БД
 > - Если переменная не задана или закомментирована — сохраняется значение из БД
+> - Обычный `x-ui update` обновляет только авторскую часть; для сохранения fork-обвязки используйте `sudo x-ui-fork update`
 
 ## Полезные команды
 
@@ -195,6 +241,8 @@ sudo journalctl -u x-ui -f                            # Логи
 sudo sqlite3 /etc/x-ui/x-ui.db \
   "SELECT key, value FROM settings;"                   # Настройки в БД
 sudo systemctl status x-ui                             # Статус
+x-ui-fork url                                          # URL панели
+sudo x-ui-fork update                                  # upstream update + fork overlay
 ```
 
 ## Очистка Docker
@@ -214,5 +262,3 @@ sudo docker volume rm ИМЯ_ТОМА
 ```
 
 > **⚠️ `prune -a --volumes`** удаляет **ВСЁ** неиспользуемое — образы, остановленные контейнеры, анонимные тома. Работающие контейнеры и их тома не затрагиваются.
-
-
