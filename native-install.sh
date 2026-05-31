@@ -217,7 +217,9 @@ if [ -f "${XUI_DIR}/fork-sync.sh" ] && ! grep -q "${XUI_DIR}/fork-sync.sh" "${XU
 fi
 
 systemctl daemon-reload
+systemctl enable x-ui >/dev/null 2>&1 || true
 echo -e "${green}  ✓ systemd перезагружен${plain}"
+echo -e "${green}  ✓ x-ui autostart включён${plain}"
 
 if [ -x "${XUI_DIR}/fork-db-apply.sh" ]; then
     cat > /etc/systemd/system/x-ui-fork-db-apply.service <<EOF
