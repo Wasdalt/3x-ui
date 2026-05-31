@@ -35,7 +35,6 @@ sqlite_escape() {
     printf "%s" "$1" | sed "s/'/''/g"
 }
 
-# Always set value (overwrites) / Всегда установить значение (перезаписывает)
 set_always() {
     key=$1
     value=$2
@@ -51,7 +50,6 @@ set_always() {
     fi
 }
 
-# Set empty value explicitly / Установить пустое значение явно
 set_empty() {
     key=$1
     esc_key=$(sqlite_escape "$key")
@@ -62,14 +60,13 @@ set_empty() {
     echo "[SET] $key = "
 }
 
-# Set only if empty in DB / Установить только если нет в БД
 set_if_empty() {
     key=$1
     value=$2
 
     if [ -n "$value" ]; then
         esc_key=$(sqlite_escape "$key")
-        existing=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}';" 2>/dev/null || echo "")
+        existing=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo "")
 
         if [ -z "$existing" ]; then
             esc_value=$(sqlite_escape "$value")
@@ -372,8 +369,66 @@ try_use_domain() {
     return 0
 }
 
+sync_inbound_tls_certs() {
+    target_domain=$1
+    target_cert_file=$2
+    target_key_file=$3
+
+    case "${XUI_SYNC_INBOUND_CERTS:-true}" in
+        true|TRUE|1|yes|YES|on|ON) ;;
+        *)
+            echo "[INBOUND-CERT] Sync disabled"
+            return 0
+            ;;
+    esac
+
+    [ -n "$target_domain" ] || return 0
+    [ -f "$target_cert_file" ] || return 0
+    [ -f "$target_key_file" ] || return 0
+
+    rows=$(sqlite3 -separator '|' "$DB_PATH" "
+SELECT id,
+       COALESCE(json_extract(stream_settings, '$.tlsSettings.serverName'), ''),
+       COALESCE(json_extract(stream_settings, '$.tlsSettings.certificates[0].certificateFile'), ''),
+       COALESCE(json_extract(stream_settings, '$.tlsSettings.certificates[0].keyFile'), '')
+FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.security') = 'tls'
+  AND json_extract(stream_settings, '$.tlsSettings.certificates[0].certificateFile') IS NOT NULL
+  AND json_extract(stream_settings, '$.tlsSettings.certificates[0].keyFile') IS NOT NULL;
+" 2>/dev/null || true)
+
+    [ -n "$rows" ] || return 0
+
+    printf "%s\n" "$rows" | while IFS='|' read -r inbound_id current_server current_cert_file current_key_file; do
+        [ -n "$inbound_id" ] || continue
+
+        if [ -f "$current_cert_file" ] && [ -f "$current_key_file" ]; then
+            continue
+        fi
+
+        esc_domain=$(sqlite_escape "$target_domain")
+        esc_cert_file=$(sqlite_escape "$target_cert_file")
+        esc_key_file=$(sqlite_escape "$target_key_file")
+
+        sqlite3 "$DB_PATH" "
+UPDATE inbounds
+SET stream_settings = json_set(
+  stream_settings,
+  '$.tlsSettings.serverName', '${esc_domain}',
+  '$.tlsSettings.certificates[0].certificateFile', '${esc_cert_file}',
+  '$.tlsSettings.certificates[0].keyFile', '${esc_key_file}'
+)
+WHERE id = ${inbound_id};
+"
+
+        echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} -> ${target_domain}"
+    done
+}
+
 # ============================================================================
-# Domain Detection with Backup Priority
+# Domain Detection
 # ============================================================================
 
 ENV_DOMAIN="$XUI_DOMAIN"
@@ -382,11 +437,12 @@ DB_DOMAIN=$(get_setting_value "webDomain")
 FINAL_DOMAIN=""
 CERT_FILE=""
 KEY_FILE=""
+SUB_DOMAIN=""
 SUB_CERT_FILE=""
 SUB_KEY_FILE=""
 
 if [ -n "$DB_DOMAIN" ]; then
-    echo "[DOMAIN] Backup/database domain found: $DB_DOMAIN"
+    echo "[DOMAIN] Database domain found: $DB_DOMAIN"
 fi
 
 if [ -n "$ENV_DOMAIN" ]; then
@@ -400,21 +456,39 @@ fi
 if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/dev/null 2>&1; then
     CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
 
-    # 1. First try backup/database domain
-    if [ -n "$DB_DOMAIN" ]; then
-        echo "[DOMAIN] Trying backup/database domain first: $DB_DOMAIN"
+    # 1. If ENV_DOMAIN is set and differs from DB_DOMAIN,
+    #    treat ENV_DOMAIN as an intentional domain change.
+    if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != "$DB_DOMAIN" ]; then
+        echo "[DOMAIN] Env domain differs from database domain"
+        echo "[DOMAIN] Database domain: ${DB_DOMAIN:-none}"
+        echo "[DOMAIN] Env domain: $ENV_DOMAIN"
+        echo "[DOMAIN] Trying env domain first"
 
-        if try_use_domain "$DB_DOMAIN" "$CERTBOT_EMAIL"; then
-            FINAL_DOMAIN="$DB_DOMAIN"
-            echo "[DOMAIN] Using backup/database domain: $FINAL_DOMAIN"
+        if try_use_domain "$ENV_DOMAIN" "$CERTBOT_EMAIL"; then
+            FINAL_DOMAIN="$ENV_DOMAIN"
+            echo "[DOMAIN] Using env domain: $FINAL_DOMAIN"
         else
-            echo "[DOMAIN] Backup/database domain is not usable: $DB_DOMAIN"
+            echo "[DOMAIN] Env domain is not usable: $ENV_DOMAIN"
+            echo "[DOMAIN] Falling back to database domain if available"
         fi
     fi
 
-    # 2. If backup domain failed, try env domain
+    # 2. If ENV_DOMAIN was not selected, try DB_DOMAIN.
+    if [ -z "$FINAL_DOMAIN" ] && [ -n "$DB_DOMAIN" ]; then
+        echo "[DOMAIN] Trying database domain: $DB_DOMAIN"
+
+        if try_use_domain "$DB_DOMAIN" "$CERTBOT_EMAIL"; then
+            FINAL_DOMAIN="$DB_DOMAIN"
+            echo "[DOMAIN] Using database domain: $FINAL_DOMAIN"
+        else
+            echo "[DOMAIN] Database domain is not usable: $DB_DOMAIN"
+        fi
+    fi
+
+    # 3. If there is no DB_DOMAIN or DB_DOMAIN failed,
+    #    try ENV_DOMAIN as a final fallback.
     if [ -z "$FINAL_DOMAIN" ] && [ -n "$ENV_DOMAIN" ]; then
-        echo "[DOMAIN] Trying env domain: $ENV_DOMAIN"
+        echo "[DOMAIN] Trying env domain as fallback: $ENV_DOMAIN"
 
         if try_use_domain "$ENV_DOMAIN" "$CERTBOT_EMAIL"; then
             FINAL_DOMAIN="$ENV_DOMAIN"
@@ -424,7 +498,6 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         fi
     fi
 
-    # 3. If any domain passed, save it
     if [ -n "$FINAL_DOMAIN" ]; then
         XUI_DOMAIN="$FINAL_DOMAIN"
         export XUI_DOMAIN
@@ -469,14 +542,17 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         XUI_DOMAIN=""
         CERT_FILE=""
         KEY_FILE=""
+        SUB_DOMAIN=""
         SUB_CERT_FILE=""
         SUB_KEY_FILE=""
     fi
 else
     echo "[AUTO-CERT] certbot is not installed, skipping certificate issue"
 
-    # Fallback: use existing cert paths only if domain is present and files exist.
-    if [ -n "$DB_DOMAIN" ]; then
+    if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != "$DB_DOMAIN" ]; then
+        echo "[DOMAIN] Using env domain without certbot: $ENV_DOMAIN"
+        XUI_DOMAIN="$ENV_DOMAIN"
+    elif [ -n "$DB_DOMAIN" ]; then
         XUI_DOMAIN="$DB_DOMAIN"
     elif [ -n "$ENV_DOMAIN" ]; then
         XUI_DOMAIN="$ENV_DOMAIN"
@@ -498,13 +574,13 @@ else
         fi
 
         if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
+            SUB_DOMAIN="$XUI_SUB_DOMAIN"
             SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/fullchain.pem}"
             SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/privkey.pem}"
-            SUB_DOMAIN="$XUI_SUB_DOMAIN"
         else
+            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
             SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
             SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
-            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
         fi
 
         if [ -n "$SUB_CERT_FILE" ] && { [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; }; then
@@ -523,6 +599,7 @@ if [ -z "$XUI_DOMAIN" ]; then
 
     CERT_FILE=""
     KEY_FILE=""
+    SUB_DOMAIN=""
     SUB_CERT_FILE=""
     SUB_KEY_FILE=""
 
@@ -590,6 +667,8 @@ elif [ -n "$XUI_SUB_DOMAIN" ]; then
     set_always "subDomain" "$XUI_SUB_DOMAIN"
 elif [ -n "$XUI_DOMAIN" ]; then
     set_always "subDomain" "$XUI_DOMAIN"
+else
+    set_empty "subDomain"
 fi
 
 if [ -n "$SUB_CERT_FILE" ]; then
@@ -603,6 +682,10 @@ if [ -n "$SUB_KEY_FILE" ]; then
 else
     set_empty "subKeyFile"
 fi
+
+# Inbound TLS certificates are stored separately in inbounds.stream_settings.
+# Keep them in sync only when the saved certificate path is broken.
+sync_inbound_tls_certs "$XUI_DOMAIN" "$CERT_FILE" "$KEY_FILE"
 
 # Session / Сессия
 set_always "sessionMaxAge" "$XUI_SESSION_TIMEOUT"
@@ -639,6 +722,7 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
 
         if [ -z "$EXISTING" ]; then
             echo "[DB] Creating xrayTemplateConfig from config.json..."
+
             TMP_ESCAPED=$(mktemp)
             sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
             ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
@@ -648,7 +732,6 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
         fi
 
         TMP_JSON=$(mktemp)
-
         sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
 
         if [ -s "$TMP_JSON" ]; then
