@@ -31,32 +31,58 @@ fi
 
 echo "Applying environment configuration..."
 
+sqlite_escape() {
+    printf "%s" "$1" | sed "s/'/''/g"
+}
+
 # Always set value (overwrites) / Всегда установить значение (перезаписывает)
 set_always() {
     key=$1
     value=$2
+
     if [ -n "$value" ]; then
-        sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='$key';"
-        sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('$key', '$value');"
+        esc_key=$(sqlite_escape "$key")
+        esc_value=$(sqlite_escape "$value")
+
+        sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='${esc_key}';"
+        sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
+
         echo "[SET] $key = $value"
     fi
+}
+
+# Set empty value explicitly / Установить пустое значение явно
+set_empty() {
+    key=$1
+    esc_key=$(sqlite_escape "$key")
+
+    sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='${esc_key}';"
+    sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '');"
+
+    echo "[SET] $key = "
 }
 
 # Set only if empty in DB / Установить только если нет в БД
 set_if_empty() {
     key=$1
     value=$2
+
     if [ -n "$value" ]; then
-        existing=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='$key';" 2>/dev/null || echo "")
+        esc_key=$(sqlite_escape "$key")
+        existing=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}';" 2>/dev/null || echo "")
+
         if [ -z "$existing" ]; then
-            sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('$key', '$value');"
+            esc_value=$(sqlite_escape "$value")
+            sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
             echo "[NEW] $key = $value"
         fi
     fi
 }
 
 get_setting_value() {
-    sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='$1';" 2>/dev/null || echo ""
+    key=$1
+    esc_key=$(sqlite_escape "$key")
+    sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo ""
 }
 
 random_uint16() {
@@ -108,6 +134,7 @@ generate_panel_port() {
         number=$(random_uint16)
         [ -n "$number" ] || number=$((i * 997))
         port=$((40000 + number % 20000))
+
         if port_is_available "$port"; then
             echo "$port"
             return 0
@@ -140,13 +167,15 @@ hash_password() {
 }
 
 if [ -n "$XUI_ADMIN_USERNAME" ]; then
-    sqlite3 "$DB_PATH" "UPDATE users SET username='$XUI_ADMIN_USERNAME' WHERE id=1;"
+    esc_username=$(sqlite_escape "$XUI_ADMIN_USERNAME")
+    sqlite3 "$DB_PATH" "UPDATE users SET username='${esc_username}' WHERE id=1;"
     echo "[CREDS] Admin username set"
 fi
 
 if [ -n "$XUI_ADMIN_PASSWORD" ]; then
     HASHED_PASS=$(hash_password "$XUI_ADMIN_PASSWORD")
-    sqlite3 "$DB_PATH" "UPDATE users SET password='$HASHED_PASS' WHERE id=1;"
+    esc_pass=$(sqlite_escape "$HASHED_PASS")
+    sqlite3 "$DB_PATH" "UPDATE users SET password='${esc_pass}' WHERE id=1;"
     echo "[CREDS] Admin password set"
 fi
 
@@ -155,59 +184,355 @@ if [ -n "$XUI_SECRET_KEY" ]; then
 fi
 
 # ============================================================================
-# Domain Detection / Определение домена
+# Domain and Certificate Helpers
 # ============================================================================
 
-# If XUI_DOMAIN empty - try to get panel domain from DB (for backups)
-if [ -z "$XUI_DOMAIN" ]; then
-    DB_DOMAIN=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+get_public_ip() {
+    for url in \
+        "https://api.ipify.org" \
+        "https://ifconfig.me/ip" \
+        "https://icanhazip.com"
+    do
+        ip=$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d ' \n\r' || true)
+
+        case "$ip" in
+            *.*)
+                echo "$ip"
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
+resolve_domain_a_records() {
+    domain="$1"
+
+    if command -v dig >/dev/null 2>&1; then
+        dig +short A "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true
+        return 0
+    fi
+
+    if command -v getent >/dev/null 2>&1; then
+        getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true
+        return 0
+    fi
+
+    return 1
+}
+
+domain_points_to_this_server() {
+    domain="$1"
+
+    [ -n "$domain" ] || return 1
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "[DNS-CHECK] curl not found, cannot detect public IP"
+        return 1
+    fi
+
+    server_ip=$(get_public_ip || true)
+
+    if [ -z "$server_ip" ]; then
+        echo "[DNS-CHECK] Cannot detect server public IP"
+        return 1
+    fi
+
+    resolved_ips=$(resolve_domain_a_records "$domain" || true)
+
+    if [ -z "$resolved_ips" ]; then
+        echo "[DNS-CHECK] FAIL: $domain has no A records"
+        echo "[DNS-CHECK] Server IP: $server_ip"
+        return 1
+    fi
+
+    if echo "$resolved_ips" | grep -qx "$server_ip"; then
+        echo "[DNS-CHECK] OK: $domain -> $server_ip"
+        return 0
+    fi
+
+    echo "[DNS-CHECK] FAIL: $domain does not point to this server"
+    echo "[DNS-CHECK] Server IP: $server_ip"
+    echo "[DNS-CHECK] Domain IPs: $(echo "$resolved_ips" | tr '\n' ' ')"
+
+    return 1
+}
+
+cert_is_valid_for_domain() {
+    domain="$1"
+
+    cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
+
+    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+        echo "[CERT-CHECK] FAIL: certificate files not found for $domain"
+        return 1
+    fi
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "[CERT-CHECK] openssl not found, cannot validate certificate"
+        return 1
+    fi
+
+    if ! openssl x509 -in "$cert_file" -noout -checkend 86400 >/dev/null 2>&1; then
+        echo "[CERT-CHECK] FAIL: certificate for $domain is expired or expires within 24h"
+        return 1
+    fi
+
+    if openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -q "DNS:${domain}"; then
+        echo "[CERT-CHECK] OK: certificate SAN contains DNS:$domain"
+        return 0
+    fi
+
+    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null || true)
+
+    case "$subject" in
+        *"CN = $domain"*|*"CN=$domain"*)
+            echo "[CERT-CHECK] OK: certificate CN matches $domain"
+            return 0
+            ;;
+    esac
+
+    echo "[CERT-CHECK] FAIL: certificate does not match $domain"
+    return 1
+}
+
+issue_cert_for_domain() {
+    domain="$1"
+    email="$2"
+
+    [ -n "$domain" ] || return 1
+
+    echo "[AUTO-CERT] Issuing certificate for $domain"
+
+    if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+        certbot_issue_domain_cert "$domain" "$email"
+        return $?
+    fi
+
+    if ! command -v certbot >/dev/null 2>&1; then
+        echo "[AUTO-CERT] certbot not found"
+        return 1
+    fi
+
+    if [ -z "$email" ] || [ "$email" = "admin@example.com" ]; then
+        echo "[AUTO-CERT] XUI_ADMIN_EMAIL not set, using --register-unsafely-without-email"
+
+        certbot certonly --standalone --non-interactive --agree-tos \
+            --register-unsafely-without-email \
+            -d "$domain" \
+            --preferred-challenges http
+    else
+        certbot certonly --standalone --non-interactive --agree-tos \
+            --email "$email" --no-eff-email \
+            -d "$domain" \
+            --preferred-challenges http
+    fi
+}
+
+try_use_domain() {
+    domain="$1"
+    email="$2"
+
+    [ -n "$domain" ] || return 1
+
+    echo "[DOMAIN] Checking domain: $domain"
+
+    if ! domain_points_to_this_server "$domain"; then
+        echo "[DOMAIN] Rejecting $domain: DNS does not point to this server"
+        return 1
+    fi
+
+    cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
+
+    if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        echo "[AUTO-CERT] Existing certificate found for $domain"
+
+        if cert_is_valid_for_domain "$domain"; then
+            echo "[AUTO-CERT] Existing certificate is valid for $domain"
+            return 0
+        fi
+
+        echo "[AUTO-CERT] Existing certificate is invalid for $domain, trying to reissue"
+    fi
+
+    if ! issue_cert_for_domain "$domain" "$email"; then
+        echo "[AUTO-CERT] Failed to issue certificate for $domain"
+        return 1
+    fi
+
+    if ! cert_is_valid_for_domain "$domain"; then
+        echo "[AUTO-CERT] Certificate was issued, but validation failed for $domain"
+        return 1
+    fi
+
+    echo "[AUTO-CERT] Domain $domain passed DNS and certificate checks"
+    return 0
+}
+
+# ============================================================================
+# Domain Detection with Backup Priority
+# ============================================================================
+
+ENV_DOMAIN="$XUI_DOMAIN"
+DB_DOMAIN=$(get_setting_value "webDomain")
+
+FINAL_DOMAIN=""
+CERT_FILE=""
+KEY_FILE=""
+SUB_CERT_FILE=""
+SUB_KEY_FILE=""
+
+if [ -n "$DB_DOMAIN" ]; then
+    echo "[DOMAIN] Backup/database domain found: $DB_DOMAIN"
+fi
+
+if [ -n "$ENV_DOMAIN" ]; then
+    echo "[DOMAIN] Env domain found: $ENV_DOMAIN"
+fi
+
+# ============================================================================
+# Auto SSL certificates with strict DNS validation
+# ============================================================================
+
+if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+    CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
+
+    # 1. First try backup/database domain
     if [ -n "$DB_DOMAIN" ]; then
-        echo "[AUTO] Domain from database: $DB_DOMAIN"
-        XUI_DOMAIN="$DB_DOMAIN"
+        echo "[DOMAIN] Trying backup/database domain first: $DB_DOMAIN"
+
+        if try_use_domain "$DB_DOMAIN" "$CERTBOT_EMAIL"; then
+            FINAL_DOMAIN="$DB_DOMAIN"
+            echo "[DOMAIN] Using backup/database domain: $FINAL_DOMAIN"
+        else
+            echo "[DOMAIN] Backup/database domain is not usable: $DB_DOMAIN"
+        fi
+    fi
+
+    # 2. If backup domain failed, try env domain
+    if [ -z "$FINAL_DOMAIN" ] && [ -n "$ENV_DOMAIN" ]; then
+        echo "[DOMAIN] Trying env domain: $ENV_DOMAIN"
+
+        if try_use_domain "$ENV_DOMAIN" "$CERTBOT_EMAIL"; then
+            FINAL_DOMAIN="$ENV_DOMAIN"
+            echo "[DOMAIN] Using env domain: $FINAL_DOMAIN"
+        else
+            echo "[DOMAIN] Env domain is not usable: $ENV_DOMAIN"
+        fi
+    fi
+
+    # 3. If any domain passed, save it
+    if [ -n "$FINAL_DOMAIN" ]; then
+        XUI_DOMAIN="$FINAL_DOMAIN"
         export XUI_DOMAIN
+
+        CERT_FILE="/etc/letsencrypt/live/${FINAL_DOMAIN}/fullchain.pem"
+        KEY_FILE="/etc/letsencrypt/live/${FINAL_DOMAIN}/privkey.pem"
+
+        if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$FINAL_DOMAIN" ]; then
+            SUB_DOMAIN="$XUI_SUB_DOMAIN"
+
+            echo "[SUB-DOMAIN] Separate subscription domain configured: $SUB_DOMAIN"
+
+            if try_use_domain "$SUB_DOMAIN" "$CERTBOT_EMAIL"; then
+                SUB_CERT_FILE="/etc/letsencrypt/live/${SUB_DOMAIN}/fullchain.pem"
+                SUB_KEY_FILE="/etc/letsencrypt/live/${SUB_DOMAIN}/privkey.pem"
+                echo "[SUB-DOMAIN] Using separate subscription domain: $SUB_DOMAIN"
+            else
+                echo "[SUB-DOMAIN] Separate subscription domain is not usable, falling back to panel domain"
+                SUB_DOMAIN="$FINAL_DOMAIN"
+                SUB_CERT_FILE="$CERT_FILE"
+                SUB_KEY_FILE="$KEY_FILE"
+            fi
+        else
+            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$FINAL_DOMAIN}"
+            SUB_CERT_FILE="$CERT_FILE"
+            SUB_KEY_FILE="$KEY_FILE"
+        fi
+
+        set_always "webDomain" "$FINAL_DOMAIN"
+        set_always "webCertFile" "$CERT_FILE"
+        set_always "webKeyFile" "$KEY_FILE"
+
+        set_always "subDomain" "$SUB_DOMAIN"
+        set_always "subCertFile" "$SUB_CERT_FILE"
+        set_always "subKeyFile" "$SUB_KEY_FILE"
+
+        echo "[DOMAIN] Final domain saved to DB: $FINAL_DOMAIN"
+        echo "[DOMAIN] Certificate paths saved to DB"
+    else
+        echo "[DOMAIN] No usable domain found. SSL not configured."
+
+        XUI_DOMAIN=""
+        CERT_FILE=""
+        KEY_FILE=""
+        SUB_CERT_FILE=""
+        SUB_KEY_FILE=""
+    fi
+else
+    echo "[AUTO-CERT] certbot is not installed, skipping certificate issue"
+
+    # Fallback: use existing cert paths only if domain is present and files exist.
+    if [ -n "$DB_DOMAIN" ]; then
+        XUI_DOMAIN="$DB_DOMAIN"
+    elif [ -n "$ENV_DOMAIN" ]; then
+        XUI_DOMAIN="$ENV_DOMAIN"
+    else
+        XUI_DOMAIN=""
+    fi
+
+    if [ -n "$XUI_DOMAIN" ]; then
+        DEFAULT_CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+        DEFAULT_KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+
+        CERT_FILE="${XUI_CERT_FILE:-$DEFAULT_CERT_FILE}"
+        KEY_FILE="${XUI_KEY_FILE:-$DEFAULT_KEY_FILE}"
+
+        if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
+            echo "[WARN] Certificate files for ${XUI_DOMAIN} not found"
+            CERT_FILE=""
+            KEY_FILE=""
+        fi
+
+        if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
+            SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/fullchain.pem}"
+            SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/privkey.pem}"
+            SUB_DOMAIN="$XUI_SUB_DOMAIN"
+        else
+            SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
+            SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
+            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
+        fi
+
+        if [ -n "$SUB_CERT_FILE" ] && { [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; }; then
+            SUB_CERT_FILE=""
+            SUB_KEY_FILE=""
+        fi
     fi
 fi
 
+# ============================================================================
+# HTTP fallback if no SSL domain
+# ============================================================================
+
 if [ -z "$XUI_DOMAIN" ]; then
-    echo "[WARN] No domain specified, SSL not configured"
+    echo "[WARN] No valid domain specified, SSL not configured"
+
     CERT_FILE=""
     KEY_FILE=""
     SUB_CERT_FILE=""
     SUB_KEY_FILE=""
-    
-    # HTTP fallback mode
+
     if [ "$XUI_ALLOW_HTTP" = "true" ]; then
         echo "[HTTP] HTTP mode enabled - panel accessible via http://server-ip:${XUI_PORT:-2053}"
     else
         echo "[TIP] Use SSH tunnel: ssh -N -L 8080:localhost:${XUI_PORT:-2053} user@server"
         echo "[TIP] Or set XUI_ALLOW_HTTP=true for HTTP access (insecure!)"
     fi
-else
-    DEFAULT_CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-    DEFAULT_KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-    CERT_FILE="${XUI_CERT_FILE:-$DEFAULT_CERT_FILE}"
-    KEY_FILE="${XUI_KEY_FILE:-$DEFAULT_KEY_FILE}"
-
-    if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
-        echo "[WARN] Certificate files for ${XUI_DOMAIN} not found, starting panel without SSL until certbot succeeds"
-        CERT_FILE=""
-        KEY_FILE=""
-    fi
-
-    if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
-        SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/fullchain.pem}"
-        SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/privkey.pem}"
-    else
-        SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
-        SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
-    fi
-
-    if [ -n "$SUB_CERT_FILE" ] && { [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; }; then
-        SUB_CERT_FILE=""
-        SUB_KEY_FILE=""
-    fi
 fi
-
 
 # ============================================================================
 # Generated Fallbacks / Автогенерация безопасных локальных значений
@@ -228,24 +553,56 @@ if [ -z "$XUI_BASE_PATH" ] && [ -z "$(get_setting_value webBasePath)" ]; then
     echo "[AUTO] Generated panel base path: $GENERATED_BASE_PATH"
 fi
 
-
 # ============================================================================
 # Panel Settings / Настройки панели
 # ============================================================================
 
 set_always "webPort" "$XUI_PORT"
-set_always "webDomain" "$XUI_DOMAIN"
-set_always "webCertFile" "$CERT_FILE"
-set_always "webKeyFile" "$KEY_FILE"
+
+if [ -n "$XUI_DOMAIN" ]; then
+    set_always "webDomain" "$XUI_DOMAIN"
+else
+    set_empty "webDomain"
+fi
+
+if [ -n "$CERT_FILE" ]; then
+    set_always "webCertFile" "$CERT_FILE"
+else
+    set_empty "webCertFile"
+fi
+
+if [ -n "$KEY_FILE" ]; then
+    set_always "webKeyFile" "$KEY_FILE"
+else
+    set_empty "webKeyFile"
+fi
+
 set_always "webBasePath" "$XUI_BASE_PATH"
 
 # Subscription / Подписка
-set_always "subCertFile" "$SUB_CERT_FILE"
-set_always "subKeyFile" "$SUB_KEY_FILE"
 set_always "subEnable" "$XUI_SUB_ENABLE"
 set_always "subPort" "$XUI_SUB_PORT"
 set_always "subPath" "$XUI_SUB_PATH"
-set_always "subDomain" "$XUI_SUB_DOMAIN"
+
+if [ -n "$SUB_DOMAIN" ]; then
+    set_always "subDomain" "$SUB_DOMAIN"
+elif [ -n "$XUI_SUB_DOMAIN" ]; then
+    set_always "subDomain" "$XUI_SUB_DOMAIN"
+elif [ -n "$XUI_DOMAIN" ]; then
+    set_always "subDomain" "$XUI_DOMAIN"
+fi
+
+if [ -n "$SUB_CERT_FILE" ]; then
+    set_always "subCertFile" "$SUB_CERT_FILE"
+else
+    set_empty "subCertFile"
+fi
+
+if [ -n "$SUB_KEY_FILE" ]; then
+    set_always "subKeyFile" "$SUB_KEY_FILE"
+else
+    set_empty "subKeyFile"
+fi
 
 # Session / Сессия
 set_always "sessionMaxAge" "$XUI_SESSION_TIMEOUT"
@@ -262,129 +619,73 @@ set_always "expireDiff" "$XUI_EXPIRE_DIFF"
 set_always "trafficDiff" "$XUI_TRAFFIC_DIFF"
 
 # ============================================================================
-# Xray Logging / Логирование Xray (через БД / via database)
+# Xray Logging / Логирование Xray через БД
 # ============================================================================
 
 XRAY_CONFIG="${XUI_XRAY_CONFIG:-/app/bin/config.json}"
 
 if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_XRAY_LOG_LEVEL" ]; then
     echo "Configuring Xray logging..."
-    
-    # Wait for config.json to exist (panel creates it on start)
-    # Ждём появления config.json (панель создаёт при старте)
+
     for i in $(seq 1 30); do
         [ -f "$XRAY_CONFIG" ] && break
         sleep 0.5
     done
-    
+
     if [ ! -f "$XRAY_CONFIG" ]; then
         echo "[WARN] Xray config not found, skipping log configuration"
     else
-        # Check if xrayTemplateConfig exists in DB, if not - create from config.json
-        # Проверяем наличие xrayTemplateConfig в БД, если нет - создаём из config.json
         EXISTING=$(sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
-        
+
         if [ -z "$EXISTING" ]; then
             echo "[DB] Creating xrayTemplateConfig from config.json..."
-            ESCAPED_CONFIG=$(sed "s/'/''/g" "$XRAY_CONFIG")
+            TMP_ESCAPED=$(mktemp)
+            sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
+            ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
+            rm -f "$TMP_ESCAPED"
+
             sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
         fi
-        
+
         TMP_JSON=$(mktemp)
-        # Dump directly from DB to file to avoid bash variable expansion issues
+
         sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
-        
+
         if [ -s "$TMP_JSON" ]; then
             if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
                 echo "[WARN] Invalid xrayTemplateConfig in DB, rebuilding from config.json"
-                ESCAPED_CONFIG=$(sed "s/'/''/g" "$XRAY_CONFIG")
-                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+
+                TMP_ESCAPED=$(mktemp)
+                sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
+                ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
+                rm -f "$TMP_ESCAPED"
+
+                sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='xrayTemplateConfig';"
+                sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+
                 cp "$XRAY_CONFIG" "$TMP_JSON"
             fi
 
-            # Apply log settings using jq
             [ -n "$XUI_XRAY_ACCESS_LOG" ] && jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
             [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
             [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-            
-            # Save to config.json formatted
+
             jq . "$TMP_JSON" > "$XRAY_CONFIG"
-            
-            # Save back to DB (escaping single quotes for sqlite)
-            ESCAPED_NEW=$(sed "s/'/''/g" "$TMP_JSON")
+
+            TMP_ESCAPED=$(mktemp)
+            sed "s/'/''/g" "$TMP_JSON" > "$TMP_ESCAPED"
+            ESCAPED_NEW=$(cat "$TMP_ESCAPED")
+            rm -f "$TMP_ESCAPED"
+
             sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
-            
+
             rm -f "$TMP_JSON"
+
             echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
         else
             rm -f "$TMP_JSON"
             echo "[WARN] Could not read xrayTemplateConfig from DB"
         fi
-    fi
-fi
-
-# ============================================================================
-# Автовыпуск SSL сертификатов (только нативная установка)
-# ============================================================================
-
-if [ -n "$XUI_DOMAIN" ] && command -v certbot > /dev/null 2>&1; then
-    CERT_PATH="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-
-    if [ ! -f "$CERT_PATH" ]; then
-        echo "[AUTO-CERT] Сертификат для ${XUI_DOMAIN} не найден, выпускаем..."
-
-        if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
-            certbot_issue_domain_cert "${XUI_DOMAIN}" "${XUI_ADMIN_EMAIL:-}" && {
-                echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
-
-                # Обновляем пути сертификатов в БД
-                CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-                KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
-                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
-                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
-                sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${KEY_FILE}');"
-                echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
-            } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
-        else
-            CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
-            if [ -z "$CERTBOT_EMAIL" ] || [ "$CERTBOT_EMAIL" = "admin@example.com" ]; then
-                echo "[AUTO-CERT] XUI_ADMIN_EMAIL не задан, используем --register-unsafely-without-email"
-                certbot certonly --standalone --non-interactive --agree-tos \
-                    --register-unsafely-without-email \
-                    -d "${XUI_DOMAIN}" \
-                    --preferred-challenges http 2>&1 && {
-                    echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
-
-                    # Обновляем пути сертификатов в БД
-                    CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-                    KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${CERT_FILE}');"
-                    echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
-                } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
-            else
-                certbot certonly --standalone --non-interactive --agree-tos \
-                    --email "$CERTBOT_EMAIL" --no-eff-email \
-                    -d "${XUI_DOMAIN}" \
-                    --preferred-challenges http 2>&1 && {
-                    echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} получен!"
-
-                    # Обновляем пути сертификатов в БД
-                    CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-                    KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webCertFile', '${CERT_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('webKeyFile', '${KEY_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subCertFile', '${CERT_FILE}');"
-                    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO settings(key, value) VALUES('subKeyFile', '${CERT_FILE}');"
-                    echo "[AUTO-CERT] Пути сертификатов обновлены в БД"
-                } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
-            fi
-        fi
-    else
-        echo "[AUTO-CERT] ✓ Сертификат для ${XUI_DOMAIN} уже существует"
     fi
 fi
 
