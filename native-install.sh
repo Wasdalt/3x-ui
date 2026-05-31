@@ -211,6 +211,10 @@ echo -e "${yellow}[6/6] Настройка certbot...${plain}"
 XUI_DOMAIN=$(grep "^XUI_DOMAIN=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
 XUI_ADMIN_EMAIL=$(grep "^XUI_ADMIN_EMAIL=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
 
+case "$XUI_ADMIN_EMAIL" in
+    admin@example.com|*@example.com|*@example.org|*@example.net) XUI_ADMIN_EMAIL="" ;;
+esac
+
 if [ -z "$XUI_DOMAIN" ] && [ -f "$DB_PATH" ]; then
     XUI_DOMAIN=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
     [ -n "$XUI_DOMAIN" ] && echo -e "${green}  ✓ Домен взят из БД: ${XUI_DOMAIN}${plain}"
@@ -257,13 +261,18 @@ if systemctl is-active --quiet x-ui; then
     PORT=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "2053")
     BASE_PATH=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || echo "/")
     DOMAIN=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "localhost")
+    CERT_FILE=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+    KEY_FILE=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
 
     [ -n "$PORT" ] || PORT="2053"
     [ -n "$BASE_PATH" ] || BASE_PATH="/"
     [ -n "$DOMAIN" ] || DOMAIN="localhost"
     
-    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
         echo -e "  📍 Панель: https://${DOMAIN}:${PORT}${BASE_PATH}"
+    elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+        echo -e "  📍 Панель: http://${DOMAIN}:${PORT}${BASE_PATH}"
+        echo -e "  ⚠ HTTPS не включён: сертификат для ${DOMAIN} ещё не выпущен"
     else
         echo -e "  📍 Панель: http://server-ip:${PORT}${BASE_PATH}"
         echo -e "  🔒 SSH tunnel: ssh -N -L 8080:localhost:${PORT} user@server-ip"

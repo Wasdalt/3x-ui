@@ -183,8 +183,16 @@ if [ -z "$XUI_DOMAIN" ]; then
         echo "[TIP] Or set XUI_ALLOW_HTTP=true for HTTP access (insecure!)"
     fi
 else
-    CERT_FILE="${XUI_CERT_FILE:-/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem}"
-    KEY_FILE="${XUI_KEY_FILE:-/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem}"
+    DEFAULT_CERT_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+    DEFAULT_KEY_FILE="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+    CERT_FILE="${XUI_CERT_FILE:-$DEFAULT_CERT_FILE}"
+    KEY_FILE="${XUI_KEY_FILE:-$DEFAULT_KEY_FILE}"
+
+    if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
+        echo "[WARN] Certificate files for ${XUI_DOMAIN} not found, starting panel without SSL until certbot succeeds"
+        CERT_FILE=""
+        KEY_FILE=""
+    fi
 
     if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
         SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/fullchain.pem}"
@@ -192,6 +200,11 @@ else
     else
         SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
         SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
+    fi
+
+    if [ -n "$SUB_CERT_FILE" ] && { [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; }; then
+        SUB_CERT_FILE=""
+        SUB_KEY_FILE=""
     fi
 fi
 
@@ -335,7 +348,7 @@ if [ -n "$XUI_DOMAIN" ] && command -v certbot > /dev/null 2>&1; then
             } || echo "[AUTO-CERT] ⚠ Не удалось получить сертификат (DNS/порт 80?)"
         else
             CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
-            if [ -z "$CERTBOT_EMAIL" ]; then
+            if [ -z "$CERTBOT_EMAIL" ] || [ "$CERTBOT_EMAIL" = "admin@example.com" ]; then
                 echo "[AUTO-CERT] XUI_ADMIN_EMAIL не задан, используем --register-unsafely-without-email"
                 certbot certonly --standalone --non-interactive --agree-tos \
                     --register-unsafely-without-email \

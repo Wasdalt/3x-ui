@@ -26,6 +26,18 @@ is_domain_name() {
     esac
 }
 
+is_placeholder_email() {
+    email=$1
+
+    [ -n "$email" ] || return 0
+
+    case "$email" in
+        *@example.com|*@example.org|*@example.net|admin@localhost|root@localhost) return 0 ;;
+        *@*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 certbot_issue_domain_cert() {
     domain=$1
     email=${2:-}
@@ -48,15 +60,15 @@ certbot_issue_domain_cert() {
 
     echo "[CERT] Requesting Let's Encrypt certificate for ${domain}"
 
-    if [ -n "$email" ]; then
+    if is_placeholder_email "$email"; then
+        echo "[CERT] XUI_ADMIN_EMAIL is empty or placeholder, using registration without email"
         certbot certonly --standalone --non-interactive --agree-tos \
-            --email "$email" --no-eff-email \
+            --register-unsafely-without-email \
             -d "$domain" \
             --preferred-challenges http
     else
-        echo "[CERT] XUI_ADMIN_EMAIL is empty, using unsafe registration without email"
         certbot certonly --standalone --non-interactive --agree-tos \
-            --register-unsafely-without-email \
+            --email "$email" --no-eff-email \
             -d "$domain" \
             --preferred-challenges http
     fi
