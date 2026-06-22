@@ -39,6 +39,12 @@ nano .env                        # редактируешь в проекте
 sudo systemctl restart x-ui      # применяется автоматически
 ```
 
+**Обновление (upstream 3x-ui + fork-слой):**
+```bash
+cd /path/to/3x-ui
+sudo bash native-update.sh
+```
+
 **Единый CLI для upstream + fork:**
 ```bash
 sudo x-ui-fork menu      # открыть официальное меню автора
@@ -153,7 +159,9 @@ XUI_FORK_DB_APPLY_DEBOUNCE=20
 /etc/letsencrypt/renewal-hooks/deploy/restart-x-ui.sh
 ```
 
-После успешного `certbot renew` hook перезапускает `x-ui`, чтобы панель подхватила новый сертификат.
+После успешного `certbot renew` hook отправляет **SIGHUP** процессу x-ui (in-process reload: ~1-2 сек вместо ~10 сек при полном restart). Xray и web-сервер перезагружаются, подхватывая новый сертификат. Если сервис не запущен — выполняется обычный `systemctl restart` как fallback.
+
+Сертификат **не перевыпускается повторно**, если уже существует и действителен более 24 часов.
 
 Автообновление работает через системный `certbot.timer`. Если timer недоступен, используется cron fallback с запуском `certbot renew --quiet` каждые 12 часов.
 
@@ -242,7 +250,7 @@ sudo docker compose --profile torrent up -d
 |---|---|
 | Изменил `.env` | `sudo systemctl restart x-ui` |
 | Обновил fork-скрипты | `sudo x-ui-fork apply` или `sudo bash native-apply.sh` |
-| Обновить официальный 3x-ui + fork-слой | `sudo x-ui-fork update` |
+| Обновить официальный 3x-ui + fork-слой | `sudo bash native-update.sh` или `sudo x-ui-fork update` |
 | Показать URL панели | `x-ui-fork url` |
 
 > **⚠️ Важно:**
@@ -269,7 +277,8 @@ sudo sqlite3 /etc/x-ui/x-ui.db \
   "SELECT key, value FROM settings;"                   # Настройки в БД
 sudo systemctl status x-ui                             # Статус
 x-ui-fork url                                          # URL панели
-sudo x-ui-fork update                                  # upstream update + fork overlay
+sudo bash native-update.sh                             # upstream update + fork overlay
+sudo x-ui-fork update                                  # то же самое через CLI
 ```
 
 ## Очистка Docker

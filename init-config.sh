@@ -336,23 +336,28 @@ try_use_domain() {
 
     echo "[DOMAIN] Checking domain: $domain"
 
-    if ! domain_points_to_this_server "$domain"; then
-        echo "[DOMAIN] Rejecting $domain: DNS does not point to this server"
-        return 1
-    fi
-
     cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
     key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
 
+    # If a valid certificate already exists, use it without requiring a DNS check.
+    # A temporary external IP API failure (ipify/ifconfig.me) would otherwise clear
+    # the cert paths from the DB and break SSL for all clients.
     if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
         echo "[AUTO-CERT] Existing certificate found for $domain"
 
         if cert_is_valid_for_domain "$domain"; then
-            echo "[AUTO-CERT] Existing certificate is valid for $domain"
+            echo "[AUTO-CERT] Valid certificate exists for $domain — skipping DNS check"
             return 0
         fi
 
         echo "[AUTO-CERT] Existing certificate is invalid for $domain, trying to reissue"
+        # Fall through to DNS check before reissuing
+    fi
+
+    # DNS check is only required when we need to issue (or reissue) a certificate.
+    if ! domain_points_to_this_server "$domain"; then
+        echo "[DOMAIN] Rejecting $domain: DNS does not point to this server"
+        return 1
     fi
 
     if ! issue_cert_for_domain "$domain" "$email"; then
@@ -365,7 +370,7 @@ try_use_domain() {
         return 1
     fi
 
-    echo "[AUTO-CERT] Domain $domain passed DNS and certificate checks"
+    echo "[AUTO-CERT] Domain $domain passed all checks"
     return 0
 }
 
@@ -724,57 +729,64 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
     if [ ! -f "$XRAY_CONFIG" ]; then
         echo "[WARN] Xray config not found, skipping log configuration"
     else
-        EXISTING=$(sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
+        # Run the entire jq/sqlite pipeline in a subshell so that any unexpected
+        # non-zero exit (e.g. jq exit 5 on a system error) does not propagate
+        # through 'set -e' and abort the parent script.
+        _configure_xray_logging() {
+            EXISTING=$(sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
 
-        if [ -z "$EXISTING" ]; then
-            echo "[DB] Creating xrayTemplateConfig from config.json..."
-
-            TMP_ESCAPED=$(mktemp)
-            sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
-            ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
-            rm -f "$TMP_ESCAPED"
-
-            sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
-        fi
-
-        TMP_JSON=$(mktemp)
-        sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
-
-        if [ -s "$TMP_JSON" ]; then
-            if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
-                echo "[WARN] Invalid xrayTemplateConfig in DB, rebuilding from config.json"
+            if [ -z "$EXISTING" ]; then
+                echo "[DB] Creating xrayTemplateConfig from config.json..."
 
                 TMP_ESCAPED=$(mktemp)
                 sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
                 ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
                 rm -f "$TMP_ESCAPED"
 
-                sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='xrayTemplateConfig';"
                 sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
-
-                cp "$XRAY_CONFIG" "$TMP_JSON"
             fi
 
-            [ -n "$XUI_XRAY_ACCESS_LOG" ] && jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-            [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-            [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+            TMP_JSON=$(mktemp)
+            sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
 
-            jq . "$TMP_JSON" > "$XRAY_CONFIG"
+            if [ -s "$TMP_JSON" ]; then
+                if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
+                    echo "[WARN] Invalid xrayTemplateConfig in DB, rebuilding from config.json"
 
-            TMP_ESCAPED=$(mktemp)
-            sed "s/'/''/g" "$TMP_JSON" > "$TMP_ESCAPED"
-            ESCAPED_NEW=$(cat "$TMP_ESCAPED")
-            rm -f "$TMP_ESCAPED"
+                    TMP_ESCAPED=$(mktemp)
+                    sed "s/'/''/g" "$XRAY_CONFIG" > "$TMP_ESCAPED"
+                    ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
+                    rm -f "$TMP_ESCAPED"
 
-            sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
+                    sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='xrayTemplateConfig';"
+                    sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
 
-            rm -f "$TMP_JSON"
+                    cp "$XRAY_CONFIG" "$TMP_JSON"
+                fi
 
-            echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
-        else
-            rm -f "$TMP_JSON"
-            echo "[WARN] Could not read xrayTemplateConfig from DB"
-        fi
+                [ -n "$XUI_XRAY_ACCESS_LOG" ] && jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+                [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+                [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+
+                jq . "$TMP_JSON" > "$XRAY_CONFIG"
+
+                TMP_ESCAPED=$(mktemp)
+                sed "s/'/''/g" "$TMP_JSON" > "$TMP_ESCAPED"
+                ESCAPED_NEW=$(cat "$TMP_ESCAPED")
+                rm -f "$TMP_ESCAPED"
+
+                sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
+
+                rm -f "$TMP_JSON"
+
+                echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
+            else
+                rm -f "$TMP_JSON"
+                echo "[WARN] Could not read xrayTemplateConfig from DB"
+            fi
+        }
+
+        _configure_xray_logging || echo "[WARN] Xray logging configuration failed (non-fatal)"
     fi
 fi
 

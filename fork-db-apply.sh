@@ -53,5 +53,5 @@ fi
 export XUI_XRAY_CONFIG
 
 if [ -x "${XUI_DIR}/init-config.sh" ]; then
-    "${XUI_DIR}/init-config.sh"
+    "${XUI_DIR}/init-config.sh" || echo "[FORK-DB-APPLY] init-config.sh exited non-zero (non-fatal)"
 fi
