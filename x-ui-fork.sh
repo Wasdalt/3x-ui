@@ -79,6 +79,7 @@ Commands:
   menu      Open official author x-ui menu
   apply     Apply fork overlay only (.env, init-config, systemd hooks)
   update    Update official 3x-ui, then reapply fork overlay
+  downgrade Rollback official 3x-ui to specific version (e.g. 2.4.3)
   restart   Restart x-ui systemd service
   url       Print current panel URL from DB
   env       Print active .env path
@@ -113,6 +114,23 @@ case "${1:-help}" in
             exit 1
         fi
         exec bash "${PROJECT_DIR}/native-update.sh"
+        ;;
+    downgrade|rollback)
+        need_root
+        version="${2:-}"
+        if [ -z "$version" ]; then
+            read -r -p "Введите версию 3x-ui для отката (например: 2.4.3): " version
+        fi
+        version="${version#v}"
+        if [ -z "$version" ]; then
+            echo -e "${red}Версия не указана${plain}"
+            exit 1
+        fi
+        echo -e "${yellow}Откат на официальную версию v${version}...${plain}"
+        bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/v${version}/install.sh") "v${version}"
+        if [ -f "${PROJECT_DIR}/native-apply.sh" ]; then
+            exec bash "${PROJECT_DIR}/native-apply.sh"
+        fi
         ;;
     restart)
         need_root

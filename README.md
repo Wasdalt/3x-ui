@@ -50,6 +50,7 @@ sudo bash native-update.sh
 x-ui-fork menu        # открыть официальное меню автора (авто-sudo)
 x-ui-fork apply       # применить fork-обвязку (.env/init-config/certbot)
 x-ui-fork update      # обновить официальный 3x-ui и снова применить fork
+x-ui-fork downgrade   # откат на конкретную официальную версию (например, 2.4.3)
 x-ui-fork restart     # перезапустить systemd-сервис x-ui
 x-ui-fork url         # показать актуальные URL панели и статус SSL
 x-ui-fork env         # показать путь активного .env
