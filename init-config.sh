@@ -408,6 +408,32 @@ sync_inbound_tls_certs() {
             ;;
     esac
 
+    # 1. Resolve target certificate from DB or disk if not provided or missing
+    if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
+        db_cert=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+        db_key=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+        db_dom=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+        if [ -n "$db_cert" ] && [ -f "$db_cert" ] && [ -f "$db_key" ]; then
+            target_cert_file="$db_cert"
+            target_key_file="$db_key"
+            target_domain="${db_dom:-$target_domain}"
+        fi
+    fi
+
+    if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
+        discovered_cert=$(find /etc/letsencrypt/live/ -name "fullchain.pem" 2>/dev/null | head -n 1)
+        if [ -n "$discovered_cert" ]; then
+            discovered_domain=$(echo "$discovered_cert" | awk -F'/' '{print $(NF-1)}')
+            discovered_key="/etc/letsencrypt/live/${discovered_domain}/privkey.pem"
+            if [ -f "$discovered_key" ]; then
+                target_cert_file="$discovered_cert"
+                target_key_file="$discovered_key"
+                target_domain="$discovered_domain"
+                echo "[INBOUND-CERT] Auto-discovered active certificate for domain: $target_domain"
+            fi
+        fi
+    fi
+
     rows=$(sqlite3 -separator '|' "$DB_PATH" "
 SELECT id,
        COALESCE(json_extract(stream_settings, '$.tlsSettings.serverName'), ''),
@@ -424,9 +450,12 @@ WHERE enable = 1
     [ -n "$rows" ] || return 0
 
     has_target_cert=0
-    if [ -n "$target_domain" ] && [ -f "$target_cert_file" ] && [ -f "$target_key_file" ]; then
+    if [ -n "$target_cert_file" ] && [ -f "$target_cert_file" ] && [ -f "$target_key_file" ]; then
         has_target_cert=1
     fi
+
+    server_ip=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n 1)
+    [ -n "$server_ip" ] || server_ip="127.0.0.1"
 
     fallback_cert="/etc/x-ui/fallback-inbound.crt"
     fallback_key="/etc/x-ui/fallback-inbound.key"
@@ -453,34 +482,32 @@ SET stream_settings = json_set(
 )
 WHERE id = ${inbound_id};
 "
-            echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} -> ${target_domain}"
+            echo "[INBOUND-CERT] Repaired broken cert for inbound id=${inbound_id}: ${current_cert_file} -> ${target_cert_file} (${target_domain})"
         else
             # Generate fallback self-signed cert if missing to prevent Xray crash on startup
             if [ ! -f "$fallback_cert" ] || [ ! -f "$fallback_key" ]; then
                 mkdir -p "/etc/x-ui"
                 if command -v openssl >/dev/null 2>&1; then
-                    openssl req -x509 -newkey rsa:2048 -nodes \
-                        -keyout "$fallback_key" \
-                        -out "$fallback_cert" \
-                        -days 3650 \
-                        -subj "/CN=localhost" >/dev/null 2>&1 || true
+                    openssl req -x509 -newkey rsa:2048 -nodes                         -keyout "$fallback_key"                         -out "$fallback_cert"                         -days 3650                         -subj "/CN=${server_ip}" >/dev/null 2>&1 || true
                 fi
             fi
 
             if [ -f "$fallback_cert" ] && [ -f "$fallback_key" ]; then
                 esc_cert_file=$(sqlite_escape "$fallback_cert")
                 esc_key_file=$(sqlite_escape "$fallback_key")
+                esc_server_name=$(sqlite_escape "${target_domain:-$server_ip}")
 
                 sqlite3 "$DB_PATH" "
 UPDATE inbounds
 SET stream_settings = json_set(
   stream_settings,
+  '$.tlsSettings.serverName', '${esc_server_name}',
   '$.tlsSettings.certificates[0].certificateFile', '${esc_cert_file}',
   '$.tlsSettings.certificates[0].keyFile', '${esc_key_file}'
 )
 WHERE id = ${inbound_id};
 "
-                echo "[INBOUND-CERT] Inbound id=${inbound_id}: missing cert (${current_cert_file}) -> fallback cert applied (prevents Xray crash)"
+                echo "[INBOUND-CERT] Inbound id=${inbound_id}: missing cert (${current_cert_file}) -> fallback cert applied (CN=${server_ip})"
             else
                 echo "[INBOUND-CERT] Warning: missing cert for inbound id=${inbound_id} (${current_cert_file})"
             fi
