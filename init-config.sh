@@ -35,6 +35,10 @@ sqlite_escape() {
     printf "%s" "$1" | sed "s/'/''/g"
 }
 
+sqlite_db() {
+    sqlite3 -cmd ".timeout 15000" "$DB_PATH" "$@"
+}
+
 set_always() {
     key=$1
     value=$2
@@ -43,8 +47,7 @@ set_always() {
         esc_key=$(sqlite_escape "$key")
         esc_value=$(sqlite_escape "$value")
 
-        sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='${esc_key}';"
-        sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
+        sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
 
         echo "[SET] $key = $value"
     fi
@@ -54,8 +57,7 @@ set_empty() {
     key=$1
     esc_key=$(sqlite_escape "$key")
 
-    sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='${esc_key}';"
-    sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '');"
+    sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '');"
 
     echo "[SET] $key = "
 }
@@ -66,11 +68,11 @@ set_if_empty() {
 
     if [ -n "$value" ]; then
         esc_key=$(sqlite_escape "$key")
-        existing=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo "")
+        existing=$(sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo "")
 
         if [ -z "$existing" ]; then
             esc_value=$(sqlite_escape "$value")
-            sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
+            sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
             echo "[NEW] $key = $value"
         fi
     fi
@@ -79,7 +81,7 @@ set_if_empty() {
 get_setting_value() {
     key=$1
     esc_key=$(sqlite_escape "$key")
-    sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo ""
+    sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo ""
 }
 
 random_uint16() {
@@ -101,11 +103,11 @@ port_is_available() {
         return 1
     fi
 
-    if sqlite3 "$DB_PATH" "SELECT 1 FROM inbounds WHERE port='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
+    if sqlite_db "SELECT 1 FROM inbounds WHERE port='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
         return 1
     fi
 
-    if sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key IN ('webPort','subPort') AND value='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
+    if sqlite_db "SELECT 1 FROM settings WHERE key IN ('webPort','subPort') AND value='$port' LIMIT 1;" 2>/dev/null | grep -q 1; then
         return 1
     fi
 
@@ -174,7 +176,7 @@ find_xui_binary() {
 if [ -n "$XUI_ADMIN_PASSWORD" ]; then
     CURRENT_USER="$XUI_ADMIN_USERNAME"
     if [ -z "$CURRENT_USER" ]; then
-        CURRENT_USER=$(sqlite3 "$DB_PATH" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+        CURRENT_USER=$(sqlite_db "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
         [ -n "$CURRENT_USER" ] || CURRENT_USER="admin"
     fi
     XUI_BIN=$(find_xui_binary || true)
@@ -186,14 +188,14 @@ if [ -n "$XUI_ADMIN_PASSWORD" ]; then
         HASHED_PASS=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$XUI_ADMIN_PASSWORD', bcrypt.gensalt(10)).decode())")
         esc_pass=$(sqlite_escape "$HASHED_PASS")
         esc_user=$(sqlite_escape "$CURRENT_USER")
-        sqlite3 "$DB_PATH" "UPDATE users SET username='${esc_user}', password='${esc_pass}' WHERE id=1;"
+        sqlite_db "UPDATE users SET username='${esc_user}', password='${esc_pass}' WHERE id=1;"
         echo "[CREDS] Admin credentials set (python bcrypt)"
     else
         echo "[CREDS] Warning: cannot hash password with bcrypt (x-ui binary not found)"
     fi
 elif [ -n "$XUI_ADMIN_USERNAME" ]; then
     esc_username=$(sqlite_escape "$XUI_ADMIN_USERNAME")
-    sqlite3 "$DB_PATH" "UPDATE users SET username='${esc_username}' WHERE id=1;"
+    sqlite_db "UPDATE users SET username='${esc_username}' WHERE id=1;"
     echo "[CREDS] Admin username set"
 fi
 
@@ -410,9 +412,9 @@ sync_inbound_tls_certs() {
 
     # 1. Resolve target certificate from DB or disk if not provided or missing
     if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
-        db_cert=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
-        db_key=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
-        db_dom=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+        db_cert=$(sqlite_db "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+        db_key=$(sqlite_db "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+        db_dom=$(sqlite_db "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
         if [ -n "$db_cert" ] && [ -f "$db_cert" ] && [ -f "$db_key" ]; then
             target_cert_file="$db_cert"
             target_key_file="$db_key"
@@ -434,7 +436,7 @@ sync_inbound_tls_certs() {
         fi
     fi
 
-    rows=$(sqlite3 -separator '|' "$DB_PATH" "
+    rows=$(sqlite_db -separator '|' "
 SELECT id,
        COALESCE(json_extract(stream_settings, '$.tlsSettings.serverName'), ''),
        COALESCE(json_extract(stream_settings, '$.tlsSettings.certificates[0].certificateFile'), ''),
@@ -472,7 +474,7 @@ WHERE enable = 1
             esc_cert_file=$(sqlite_escape "$target_cert_file")
             esc_key_file=$(sqlite_escape "$target_key_file")
 
-            sqlite3 "$DB_PATH" "
+            sqlite_db "
 UPDATE inbounds
 SET stream_settings = json_set(
   stream_settings,
@@ -497,7 +499,7 @@ WHERE id = ${inbound_id};
                 esc_key_file=$(sqlite_escape "$fallback_key")
                 esc_server_name=$(sqlite_escape "${target_domain:-$server_ip}")
 
-                sqlite3 "$DB_PATH" "
+                sqlite_db "
 UPDATE inbounds
 SET stream_settings = json_set(
   stream_settings,
@@ -810,7 +812,7 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
         # non-zero exit (e.g. jq exit 5 on a system error) does not propagate
         # through 'set -e' and abort the parent script.
         _configure_xray_logging() {
-            EXISTING=$(sqlite3 "$DB_PATH" "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
+            EXISTING=$(sqlite_db "SELECT 1 FROM settings WHERE key='xrayTemplateConfig' LIMIT 1;" 2>/dev/null || echo "")
 
             if [ -z "$EXISTING" ]; then
                 echo "[DB] Creating xrayTemplateConfig from config.json..."
@@ -820,11 +822,11 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
                 ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
                 rm -f "$TMP_ESCAPED"
 
-                sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+                sqlite_db "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
             fi
 
             TMP_JSON=$(mktemp)
-            sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
+            sqlite_db "SELECT value FROM settings WHERE key='xrayTemplateConfig';" > "$TMP_JSON"
 
             if [ -s "$TMP_JSON" ]; then
                 if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
@@ -835,8 +837,8 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
                     ESCAPED_CONFIG=$(cat "$TMP_ESCAPED")
                     rm -f "$TMP_ESCAPED"
 
-                    sqlite3 "$DB_PATH" "DELETE FROM settings WHERE key='xrayTemplateConfig';"
-                    sqlite3 "$DB_PATH" "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
+                    sqlite_db "DELETE FROM settings WHERE key='xrayTemplateConfig';"
+                    sqlite_db "INSERT INTO settings (key, value) VALUES ('xrayTemplateConfig', '$ESCAPED_CONFIG');"
 
                     cp "$XRAY_CONFIG" "$TMP_JSON"
                 fi
@@ -852,7 +854,7 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
                 ESCAPED_NEW=$(cat "$TMP_ESCAPED")
                 rm -f "$TMP_ESCAPED"
 
-                sqlite3 "$DB_PATH" "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
+                sqlite_db "UPDATE settings SET value='$ESCAPED_NEW' WHERE key='xrayTemplateConfig';"
 
                 rm -f "$TMP_JSON"
 
