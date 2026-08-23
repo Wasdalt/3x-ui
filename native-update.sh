@@ -34,6 +34,12 @@ echo -e "${green}  3x-ui unified update: upstream + fork overlay${plain}"
 echo -e "${green}============================================================================${plain}"
 echo ""
 
+if [ ! -d "/usr/local/x-ui" ]; then
+    echo -e "${red}Ошибка: 3x-ui ещё не установлен в системе.${plain}"
+    echo -e "${yellow}Для первичной установки выполните:${plain} sudo bash native-install.sh"
+    exit 1
+fi
+
 if [ -f "$DB_PATH" ]; then
     BACKUP_PATH="/tmp/x-ui.db.update.$(date +%s)"
     cp "$DB_PATH" "$BACKUP_PATH"

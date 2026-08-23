@@ -55,8 +55,8 @@ if [ -f "${SCRIPT_DIR}/certbot-domain.sh" ]; then
 fi
 
 if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
-    cp -f "${SCRIPT_DIR}/x-ui-fork.sh" "$XUI_FORK_CLI"
-    chmod +x "$XUI_FORK_CLI"
+    chmod +x "${SCRIPT_DIR}/x-ui-fork.sh"
+    ln -sf "${SCRIPT_DIR}/x-ui-fork.sh" "$XUI_FORK_CLI"
     echo "$SCRIPT_DIR" > "$XUI_FORK_PROJECT_FILE"
     echo -e "${green}  ✓ x-ui-fork обновлён${plain}"
 fi

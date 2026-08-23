@@ -55,6 +55,8 @@ elif command -v yum > /dev/null 2>&1; then
     yum install -y -q sqlite jq certbot cronie > /dev/null 2>&1
 elif command -v apk > /dev/null 2>&1; then
     apk add --no-cache sqlite jq certbot > /dev/null 2>&1
+elif command -v pacman > /dev/null 2>&1; then
+    pacman -Sy --noconfirm sqlite jq certbot cronie > /dev/null 2>&1 || pacman -Sy --noconfirm sqlite jq certbot > /dev/null 2>&1
 else
     echo -e "${red}Неподдерживаемый менеджер пакетов${plain}"
     exit 1
@@ -119,8 +121,8 @@ if [ -f "${SCRIPT_DIR}/native-update.sh" ]; then
     chmod +x "${SCRIPT_DIR}/native-update.sh"
 fi
 if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
-    cp -f "${SCRIPT_DIR}/x-ui-fork.sh" "${XUI_FORK_CLI}"
-    chmod +x "${XUI_FORK_CLI}"
+    chmod +x "${SCRIPT_DIR}/x-ui-fork.sh"
+    ln -sf "${SCRIPT_DIR}/x-ui-fork.sh" "${XUI_FORK_CLI}"
     echo "${SCRIPT_DIR}" > "${XUI_FORK_PROJECT_FILE}"
 fi
 mkdir -p "${XUI_DIR}/xray-logs"
@@ -317,15 +319,25 @@ if systemctl is-active --quiet x-ui; then
     [ -n "$BASE_PATH" ] || BASE_PATH="/"
     [ -n "$DOMAIN" ] || DOMAIN="localhost"
     
-    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-        echo -e "  📍 Панель: https://${DOMAIN}:${PORT}${BASE_PATH}"
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ] && [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
+        echo -e "  📍 Панель (HTTPS):      https://${DOMAIN}:${PORT}${BASE_PATH}"
+        echo -e "  📍 Локально (туннель):  http://localhost:${PORT}${BASE_PATH}"
     elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
-        echo -e "  📍 Панель: http://${DOMAIN}:${PORT}${BASE_PATH}"
-        echo -e "  ⚠ HTTPS не включён: сертификат для ${DOMAIN} ещё не выпущен"
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        echo -e "  📍 Домен (без SSL):     http://${DOMAIN}:${PORT}${BASE_PATH}"
+        echo -e "  📍 Локально на сервере: http://localhost:${PORT}${BASE_PATH}"
+        if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "127.0.0.1" ]; then
+            echo -e "  📍 По сети / через IP:  http://${LOCAL_IP}:${PORT}${BASE_PATH}"
+        fi
+        echo -e "  ⚠ HTTPS не активен: сертификат для ${DOMAIN} не найден на диске"
     else
-        echo -e "  📍 Панель: http://server-ip:${PORT}${BASE_PATH}"
-        echo -e "  🔒 SSH tunnel: ssh -N -L 8080:localhost:${PORT} user@server-ip"
-        echo -e "  🌐 Локально через tunnel: http://localhost:8080${BASE_PATH}"
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        echo -e "  📍 Локально на сервере: http://localhost:${PORT}${BASE_PATH}"
+        if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "127.0.0.1" ]; then
+            echo -e "  📍 По сети / через IP:  http://${LOCAL_IP}:${PORT}${BASE_PATH}"
+        fi
+        echo -e "  🔒 SSH туннель:         ssh -N -L 8080:localhost:${PORT} user@server-ip"
+        echo -e "  🌐 Через туннель:       http://localhost:8080${BASE_PATH}"
     fi
     echo -e ""
     echo -e "  Конфигурация: ${yellow}${XUI_ENV_FILE}${plain}"

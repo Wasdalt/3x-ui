@@ -47,15 +47,16 @@ sudo bash native-update.sh
 
 **Единый CLI для upstream + fork:**
 ```bash
-sudo x-ui-fork menu      # открыть официальное меню автора
-sudo x-ui-fork apply     # применить fork-обвязку (.env/init-config/certbot)
-sudo x-ui-fork update    # обновить официальный 3x-ui и снова применить fork
-sudo x-ui-fork restart   # перезапустить systemd-сервис x-ui
-x-ui-fork url            # показать текущий URL панели из БД
-x-ui-fork env            # показать путь активного .env
+x-ui-fork menu        # открыть официальное меню автора (авто-sudo)
+x-ui-fork apply       # применить fork-обвязку (.env/init-config/certbot)
+x-ui-fork update      # обновить официальный 3x-ui и снова применить fork
+x-ui-fork restart     # перезапустить systemd-сервис x-ui
+x-ui-fork url         # показать актуальные URL панели и статус SSL
+x-ui-fork env         # показать путь активного .env
 ```
 
-> Для обновлений на сервере используйте `sudo x-ui-fork update`, а не обычный `x-ui update`: команда обновит официальный 3x-ui и затем заново применит fork-слой.
+> Поддерживаемые дистрибутивы: Debian/Ubuntu (`apt`), CentOS/RHEL/Alma/Rocky (`yum`), Alpine (`apk`), Arch Linux/EndeavourOS/Manjaro (`pacman`).
+> Для обновлений используйте `x-ui-fork update` (или `sudo bash native-update.sh`), а не обычный `x-ui update`.
 
 **Удаление .env-дополнений (оставляет 3x-ui):**
 ```bash

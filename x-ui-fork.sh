@@ -21,7 +21,14 @@ fi
 [ -n "$PROJECT_DIR" ] || PROJECT_DIR="/home/usermain/project/3x-ui"
 
 need_root() {
-    [[ $EUID -ne 0 ]] && echo -e "${red}Ошибка: запустите от root${plain}" && exit 1
+    if [[ $EUID -ne 0 ]]; then
+        if command -v sudo >/dev/null 2>&1; then
+            exec sudo "$0" "$@"
+        else
+            echo -e "${red}Ошибка: запустите от root или через sudo${plain}"
+            exit 1
+        fi
+    fi
 }
 
 panel_url() {
@@ -34,15 +41,31 @@ panel_url() {
     base_path=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || echo "")
     domain=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
 
+    cert_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+    key_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+
     [ -n "$port" ] || port="2053"
     [ -n "$base_path" ] || base_path="/"
 
-    if [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
-        echo "https://${domain}:${port}${base_path}"
+    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+    if [ -n "$domain" ] && [ "$domain" != "localhost" ] && [ -n "$cert_file" ] && [ -n "$key_file" ] && [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        echo "Панель (HTTPS):        https://${domain}:${port}${base_path}"
+        echo "Локально (туннель):    http://localhost:${port}${base_path}"
+    elif [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
+        echo "Домен (без SSL):       http://${domain}:${port}${base_path}"
+        echo "Локально на сервере:   http://localhost:${port}${base_path}"
+        if [ -n "$local_ip" ] && [ "$local_ip" != "127.0.0.1" ]; then
+            echo "По сети / через IP:    http://${local_ip}:${port}${base_path}"
+        fi
+        echo "⚠ Сертификат SSL для ${domain} не найден, HTTPS не активен"
     else
-        echo "http://server-ip:${port}${base_path}"
-        echo "SSH tunnel: ssh -N -L 8080:localhost:${port} user@server-ip"
-        echo "Tunnel URL: http://localhost:8080${base_path}"
+        echo "Локально на сервере:   http://localhost:${port}${base_path}"
+        if [ -n "$local_ip" ] && [ "$local_ip" != "127.0.0.1" ]; then
+            echo "По сети / через IP:    http://${local_ip}:${port}${base_path}"
+        fi
+        echo "SSH туннель:           ssh -N -L 8080:localhost:${port} user@server-ip"
+        echo "Через туннель:         http://localhost:8080${base_path}"
     fi
 }
 

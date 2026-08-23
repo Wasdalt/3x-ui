@@ -159,21 +159,42 @@ generate_base_path() {
 # Admin Credentials / Учётные данные администратора
 # ============================================================================
 
-hash_password() {
-    echo -n "$1" | sha256sum | cut -d' ' -f1
+find_xui_binary() {
+    for b in "/usr/local/x-ui/x-ui" "/app/x-ui" "$(command -v x-ui 2>/dev/null)"; do
+        if [ -n "$b" ] && [ -x "$b" ]; then
+            if head -c 4 "$b" 2>/dev/null | grep -q "ELF"; then
+                echo "$b"
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
-if [ -n "$XUI_ADMIN_USERNAME" ]; then
+if [ -n "$XUI_ADMIN_PASSWORD" ]; then
+    CURRENT_USER="$XUI_ADMIN_USERNAME"
+    if [ -z "$CURRENT_USER" ]; then
+        CURRENT_USER=$(sqlite3 "$DB_PATH" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+        [ -n "$CURRENT_USER" ] || CURRENT_USER="admin"
+    fi
+    XUI_BIN=$(find_xui_binary || true)
+    if [ -n "$XUI_BIN" ]; then
+        # 3x-ui utilizes bcrypt hashing for passwords; use setting CLI to hash correctly
+        "$XUI_BIN" setting -username "$CURRENT_USER" -password "$XUI_ADMIN_PASSWORD" >/dev/null 2>&1 || true
+        echo "[CREDS] Admin credentials set (bcrypt)"
+    elif command -v python3 >/dev/null 2>&1 && python3 -c "import bcrypt" 2>/dev/null; then
+        HASHED_PASS=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$XUI_ADMIN_PASSWORD', bcrypt.gensalt(10)).decode())")
+        esc_pass=$(sqlite_escape "$HASHED_PASS")
+        esc_user=$(sqlite_escape "$CURRENT_USER")
+        sqlite3 "$DB_PATH" "UPDATE users SET username='${esc_user}', password='${esc_pass}' WHERE id=1;"
+        echo "[CREDS] Admin credentials set (python bcrypt)"
+    else
+        echo "[CREDS] Warning: cannot hash password with bcrypt (x-ui binary not found)"
+    fi
+elif [ -n "$XUI_ADMIN_USERNAME" ]; then
     esc_username=$(sqlite_escape "$XUI_ADMIN_USERNAME")
     sqlite3 "$DB_PATH" "UPDATE users SET username='${esc_username}' WHERE id=1;"
     echo "[CREDS] Admin username set"
-fi
-
-if [ -n "$XUI_ADMIN_PASSWORD" ]; then
-    HASHED_PASS=$(hash_password "$XUI_ADMIN_PASSWORD")
-    esc_pass=$(sqlite_escape "$HASHED_PASS")
-    sqlite3 "$DB_PATH" "UPDATE users SET password='${esc_pass}' WHERE id=1;"
-    echo "[CREDS] Admin password set"
 fi
 
 if [ -n "$XUI_SECRET_KEY" ]; then
