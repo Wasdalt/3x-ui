@@ -39,6 +39,9 @@ sqlite_db() {
     sqlite3 -cmd ".timeout 15000" "$DB_PATH" "$@"
 }
 
+# Enable WAL mode so x-ui traffic updates and scripts never lock each other
+sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2>&1 || true
+
 set_always() {
     key=$1
     value=$2
