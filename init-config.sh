@@ -468,11 +468,12 @@ WHERE enable = 1
     printf "%s\n" "$rows" | while IFS='|' read -r inbound_id current_server current_cert_file current_key_file; do
         [ -n "$inbound_id" ] || continue
 
-        if [ -f "$current_cert_file" ] && [ -f "$current_key_file" ]; then
-            continue
-        fi
-
         if [ "$has_target_cert" -eq 1 ]; then
+            # Skip if already up-to-date with target domain and cert files
+            if [ "$current_cert_file" = "$target_cert_file" ] && [ "$current_key_file" = "$target_key_file" ] && [ "$current_server" = "$target_domain" ]; then
+                continue
+            fi
+
             esc_domain=$(sqlite_escape "$target_domain")
             esc_cert_file=$(sqlite_escape "$target_cert_file")
             esc_key_file=$(sqlite_escape "$target_key_file")
@@ -487,9 +488,14 @@ SET stream_settings = json_set(
 )
 WHERE id = ${inbound_id};
 "
-            echo "[INBOUND-CERT] Repaired broken cert for inbound id=${inbound_id}: ${current_cert_file} -> ${target_cert_file} (${target_domain})"
+            echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} (${current_cert_file}) -> ${target_domain} (${target_cert_file})"
         else
-            # Generate fallback self-signed cert if missing to prevent Xray crash on startup
+            # Keep existing cert if file exists on disk and is valid
+            if [ -f "$current_cert_file" ] && [ -f "$current_key_file" ]; then
+                continue
+            fi
+
+            # Apply fallback self-signed cert if current file is missing
             if [ ! -f "$fallback_cert" ] || [ ! -f "$fallback_key" ]; then
                 mkdir -p "/etc/x-ui"
                 if command -v openssl >/dev/null 2>&1; then
