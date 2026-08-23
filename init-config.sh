@@ -42,9 +42,8 @@ sqlite_db() {
 # Enable WAL mode so x-ui traffic updates and scripts never lock each other
 sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2>&1 || true
 
-# Deduplicate settings table and enforce unique index on key
-sqlite_db "DELETE FROM settings WHERE id NOT IN (SELECT MAX(id) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
-sqlite_db "CREATE UNIQUE INDEX IF NOT EXISTS idx_settings_key ON settings(key);" >/dev/null 2>&1 || true
+# Deduplicate settings table
+sqlite_db "DELETE FROM settings WHERE rowid NOT IN (SELECT MAX(rowid) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
 
 set_always() {
     key=$1
@@ -54,8 +53,10 @@ set_always() {
         esc_key=$(sqlite_escape "$key")
         esc_value=$(sqlite_escape "$value")
 
-        sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
-
+        sqlite_db "
+UPDATE settings SET value = '${esc_value}' WHERE key = '${esc_key}';
+INSERT INTO settings (key, value) SELECT '${esc_key}', '${esc_value}' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
+"
         echo "[SET] $key = $value"
     fi
 }
@@ -64,8 +65,10 @@ set_empty() {
     key=$1
     esc_key=$(sqlite_escape "$key")
 
-    sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '') ON CONFLICT(key) DO UPDATE SET value = '';"
-
+    sqlite_db "
+UPDATE settings SET value = '' WHERE key = '${esc_key}';
+INSERT INTO settings (key, value) SELECT '${esc_key}', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
+"
     echo "[SET] $key = "
 }
 
@@ -79,7 +82,10 @@ set_if_empty() {
 
         if [ -z "$existing" ]; then
             esc_value=$(sqlite_escape "$value")
-            sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
+            sqlite_db "
+UPDATE settings SET value = '${esc_value}' WHERE key = '${esc_key}';
+INSERT INTO settings (key, value) SELECT '${esc_key}', '${esc_value}' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
+"
             echo "[NEW] $key = $value"
         fi
     fi
