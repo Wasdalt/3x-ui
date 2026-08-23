@@ -408,16 +408,6 @@ sync_inbound_tls_certs() {
             ;;
     esac
 
-    if [ -z "$target_domain" ]; then
-        echo "[INBOUND-CERT] Skip sync: target domain is empty"
-        return 0
-    fi
-
-    if [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
-        echo "[INBOUND-CERT] Skip sync: certificate for $target_domain is not available"
-        return 0
-    fi
-
     rows=$(sqlite3 -separator '|' "$DB_PATH" "
 SELECT id,
        COALESCE(json_extract(stream_settings, '$.tlsSettings.serverName'), ''),
@@ -433,6 +423,14 @@ WHERE enable = 1
 
     [ -n "$rows" ] || return 0
 
+    has_target_cert=0
+    if [ -n "$target_domain" ] && [ -f "$target_cert_file" ] && [ -f "$target_key_file" ]; then
+        has_target_cert=1
+    fi
+
+    fallback_cert="/etc/x-ui/fallback-inbound.crt"
+    fallback_key="/etc/x-ui/fallback-inbound.key"
+
     printf "%s\n" "$rows" | while IFS='|' read -r inbound_id current_server current_cert_file current_key_file; do
         [ -n "$inbound_id" ] || continue
 
@@ -440,11 +438,12 @@ WHERE enable = 1
             continue
         fi
 
-        esc_domain=$(sqlite_escape "$target_domain")
-        esc_cert_file=$(sqlite_escape "$target_cert_file")
-        esc_key_file=$(sqlite_escape "$target_key_file")
+        if [ "$has_target_cert" -eq 1 ]; then
+            esc_domain=$(sqlite_escape "$target_domain")
+            esc_cert_file=$(sqlite_escape "$target_cert_file")
+            esc_key_file=$(sqlite_escape "$target_key_file")
 
-        sqlite3 "$DB_PATH" "
+            sqlite3 "$DB_PATH" "
 UPDATE inbounds
 SET stream_settings = json_set(
   stream_settings,
@@ -454,8 +453,38 @@ SET stream_settings = json_set(
 )
 WHERE id = ${inbound_id};
 "
+            echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} -> ${target_domain}"
+        else
+            # Generate fallback self-signed cert if missing to prevent Xray crash on startup
+            if [ ! -f "$fallback_cert" ] || [ ! -f "$fallback_key" ]; then
+                mkdir -p "/etc/x-ui"
+                if command -v openssl >/dev/null 2>&1; then
+                    openssl req -x509 -newkey rsa:2048 -nodes \
+                        -keyout "$fallback_key" \
+                        -out "$fallback_cert" \
+                        -days 3650 \
+                        -subj "/CN=localhost" >/dev/null 2>&1 || true
+                fi
+            fi
 
-        echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} -> ${target_domain}"
+            if [ -f "$fallback_cert" ] && [ -f "$fallback_key" ]; then
+                esc_cert_file=$(sqlite_escape "$fallback_cert")
+                esc_key_file=$(sqlite_escape "$fallback_key")
+
+                sqlite3 "$DB_PATH" "
+UPDATE inbounds
+SET stream_settings = json_set(
+  stream_settings,
+  '$.tlsSettings.certificates[0].certificateFile', '${esc_cert_file}',
+  '$.tlsSettings.certificates[0].keyFile', '${esc_key_file}'
+)
+WHERE id = ${inbound_id};
+"
+                echo "[INBOUND-CERT] Inbound id=${inbound_id}: missing cert (${current_cert_file}) -> fallback cert applied (prevents Xray crash)"
+            else
+                echo "[INBOUND-CERT] Warning: missing cert for inbound id=${inbound_id} (${current_cert_file})"
+            fi
+        fi
     done
 }
 
