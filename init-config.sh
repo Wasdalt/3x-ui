@@ -42,6 +42,10 @@ sqlite_db() {
 # Enable WAL mode so x-ui traffic updates and scripts never lock each other
 sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2>&1 || true
 
+# Deduplicate settings table and enforce unique index on key
+sqlite_db "DELETE FROM settings WHERE id NOT IN (SELECT MAX(id) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
+sqlite_db "CREATE UNIQUE INDEX IF NOT EXISTS idx_settings_key ON settings(key);" >/dev/null 2>&1 || true
+
 set_always() {
     key=$1
     value=$2
@@ -50,7 +54,7 @@ set_always() {
         esc_key=$(sqlite_escape "$key")
         esc_value=$(sqlite_escape "$value")
 
-        sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
+        sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
 
         echo "[SET] $key = $value"
     fi
@@ -60,7 +64,7 @@ set_empty() {
     key=$1
     esc_key=$(sqlite_escape "$key")
 
-    sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '');"
+    sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '') ON CONFLICT(key) DO UPDATE SET value = '';"
 
     echo "[SET] $key = "
 }
@@ -71,11 +75,11 @@ set_if_empty() {
 
     if [ -n "$value" ]; then
         esc_key=$(sqlite_escape "$key")
-        existing=$(sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo "")
+        existing=$(sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
 
         if [ -z "$existing" ]; then
             esc_value=$(sqlite_escape "$value")
-            sqlite_db "INSERT OR REPLACE INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}');"
+            sqlite_db "INSERT INTO settings (key, value) VALUES ('${esc_key}', '${esc_value}') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
             echo "[NEW] $key = $value"
         fi
     fi
@@ -84,7 +88,7 @@ set_if_empty() {
 get_setting_value() {
     key=$1
     esc_key=$(sqlite_escape "$key")
-    sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' LIMIT 1;" 2>/dev/null || echo ""
+    sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
 random_uint16() {

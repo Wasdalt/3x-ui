@@ -37,17 +37,18 @@ panel_url() {
         return 1
     fi
 
-    port=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "")
-    base_path=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || echo "")
-    domain=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+    port=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webPort' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
+    base_path=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webBasePath' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
+    domain=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webDomain' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
 
-    cert_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
-    key_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+    cert_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webCertFile' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
+    key_file=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webKeyFile' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")
 
     [ -n "$port" ] || port="2053"
     [ -n "$base_path" ] || base_path="/"
 
-    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    local_ip=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n 1)
+    [ -n "$local_ip" ] || local_ip=$(hostname -i 2>/dev/null | awk '{print $1}')
 
     if [ -n "$domain" ] && [ "$domain" != "localhost" ] && [ -n "$cert_file" ] && [ -n "$key_file" ] && [ -f "$cert_file" ] && [ -f "$key_file" ]; then
         echo "Панель (HTTPS):        https://${domain}:${port}${base_path}"
