@@ -70,21 +70,33 @@ panel_url() {
     fi
 
     admin_user=$(sqlite3 "$DB_PATH" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "")
-    secret_key=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='secret';" 2>/dev/null || echo "")
+    admin_pass=""
     api_token=""
+
     if [ -f "/etc/x-ui/install-result.env" ]; then
+        if [ -z "$admin_user" ]; then
+            admin_user=$(grep -iE "^(XUI_)?USERNAME=" "/etc/x-ui/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+        fi
+        admin_pass=$(grep -iE "^(XUI_)?PASSWORD=" "/etc/x-ui/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
         api_token=$(grep -iE "^(XUI_)?(API_TOKEN|TOKEN)=" "/etc/x-ui/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+
+    if [ -z "$admin_pass" ] && [ -n "$XUI_ADMIN_PASSWORD" ]; then
+        admin_pass="$XUI_ADMIN_PASSWORD"
     fi
 
     echo ""
     if [ -n "$admin_user" ]; then
         echo "👤 Логин:              ${admin_user}"
     fi
+    if [ -n "$admin_pass" ]; then
+        echo "🔑 Пароль:             ${admin_pass}"
+    fi
     if [ -n "$api_token" ]; then
         echo "🎫 API Token:          ${api_token}"
     fi
-    if [ -n "$secret_key" ]; then
-        echo "🛡️ Секретный ключ:     ${secret_key}"
+    if [ -n "${XUI_SECRET_KEY:-}" ]; then
+        echo "🛡️ Секретный ключ:     ${XUI_SECRET_KEY}"
     fi
 }
 
@@ -157,6 +169,7 @@ case "${1:-help}" in
         echo -e "${green}x-ui restarted${plain}"
         ;;
     url)
+        need_root
         panel_url
         ;;
     env)

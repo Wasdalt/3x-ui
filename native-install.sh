@@ -409,8 +409,8 @@ if systemctl is-active --quiet x-ui; then
     if [ -n "$API_TOKEN" ]; then
         echo -e "  🎫 API Token:           ${green}${API_TOKEN}${plain}"
     fi
-    if [ -n "$SECRET_KEY" ]; then
-        echo -e "  🛡️ Секретный ключ:      ${SECRET_KEY}"
+    if [ -n "${XUI_SECRET_KEY:-}" ]; then
+        echo -e "  🛡️ Секретный ключ:      ${XUI_SECRET_KEY}"
     fi
     echo -e ""
     echo -e "  Конфигурация: ${yellow}${XUI_ENV_FILE}${plain}"
