@@ -48,20 +48,39 @@ echo ""
 # ============================================================================
 echo -e "${yellow}[1/6] Установка зависимостей...${plain}"
 
-if command -v apt-get > /dev/null 2>&1; then
-    apt-get update -qq
-    apt-get install -y -qq sqlite3 jq certbot cron > /dev/null 2>&1
-elif command -v yum > /dev/null 2>&1; then
-    yum install -y -q sqlite jq certbot cronie > /dev/null 2>&1
-elif command -v apk > /dev/null 2>&1; then
-    apk add --no-cache sqlite jq certbot > /dev/null 2>&1
-elif command -v pacman > /dev/null 2>&1; then
-    pacman -Sy --noconfirm sqlite jq certbot cronie > /dev/null 2>&1 || pacman -Sy --noconfirm sqlite jq certbot > /dev/null 2>&1
-else
-    echo -e "${red}Неподдерживаемый менеджер пакетов${plain}"
+install_deps() {
+    if command -v apt-get > /dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y -qq || true
+        apt-get install -y -qq sqlite3 jq certbot cron > /dev/null 2>&1 || \
+        apt-get install -y -qq sqlite3 jq certbot > /dev/null 2>&1 || \
+        apt-get install -y sqlite3 jq
+    elif command -v dnf > /dev/null 2>&1; then
+        dnf install -y -q sqlite jq certbot cronie > /dev/null 2>&1 || \
+        dnf install -y -q sqlite jq certbot > /dev/null 2>&1 || \
+        dnf install -y sqlite jq
+    elif command -v yum > /dev/null 2>&1; then
+        yum install -y -q sqlite jq certbot cronie > /dev/null 2>&1 || \
+        yum install -y -q sqlite jq certbot > /dev/null 2>&1 || \
+        yum install -y sqlite jq
+    elif command -v apk > /dev/null 2>&1; then
+        apk add --no-cache sqlite jq certbot > /dev/null 2>&1 || \
+        apk add --no-cache sqlite jq
+    elif command -v pacman > /dev/null 2>&1; then
+        pacman -Sy --noconfirm sqlite jq certbot cronie > /dev/null 2>&1 || \
+        pacman -Sy --noconfirm sqlite jq certbot > /dev/null 2>&1 || \
+        pacman -Sy --noconfirm sqlite jq
+    else
+        echo -e "${red}Неподдерживаемый менеджер пакетов${plain}"
+        exit 1
+    fi
+}
+
+install_deps || {
+    echo -e "${red}Ошибка при установке зависимостей (sqlite3, jq)${plain}"
     exit 1
-fi
-echo -e "${green}  ✓ sqlite3, jq, certbot установлены${plain}"
+}
+echo -e "${green}  ✓ Зависимости проверены и установлены${plain}"
 
 # ============================================================================
 # 2. Установка 3x-ui через оригинальный install.sh
