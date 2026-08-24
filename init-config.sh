@@ -800,6 +800,21 @@ else
     set_empty "subKeyFile"
 fi
 
+# Resolve any collision between subPort and existing inbound ports
+sub_port_val=$(get_setting_value "subPort")
+if [ -n "$sub_port_val" ] && [ "$sub_port_val" -gt 0 ] 2>/dev/null; then
+    conflicting_inbound=$(sqlite_db "SELECT id || ' (' || tag || ')' FROM inbounds WHERE enable = 1 AND port = ${sub_port_val} LIMIT 1;" 2>/dev/null || echo "")
+    if [ -n "$conflicting_inbound" ]; then
+        echo "[WARN] Subscription port ${sub_port_val} conflicts with inbound ${conflicting_inbound}"
+        new_sub_port=$((sub_port_val + 1))
+        while [ "$(sqlite_db "SELECT count(*) FROM inbounds WHERE port = ${new_sub_port};" 2>/dev/null || echo "1")" -gt 0 ]; do
+            new_sub_port=$((new_sub_port + 1))
+        done
+        set_always "subPort" "$new_sub_port"
+        echo "[AUTO-FIX] Shifted subPort to ${new_sub_port} to prevent Xray port collision"
+    fi
+fi
+
 # Inbound TLS certificates are stored separately in inbounds.stream_settings.
 # Keep them in sync only when the saved certificate path is broken.
 sync_inbound_tls_certs "$XUI_DOMAIN" "$CERT_FILE" "$KEY_FILE"
