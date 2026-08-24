@@ -380,6 +380,38 @@ if systemctl is-active --quiet x-ui; then
         echo -e "  🔒 SSH туннель:         ssh -N -L 8080:localhost:${PORT} user@server-ip"
         echo -e "  🌐 Через туннель:       http://localhost:8080${BASE_PATH}"
     fi
+
+    # Учётные данные и токен
+    ADMIN_USER=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "")
+    ADMIN_PASS="${XUI_ADMIN_PASSWORD:-}"
+    API_TOKEN=""
+    SECRET_KEY=$(sqlite3 "${XUI_CONFIG_DIR}/x-ui.db" "SELECT value FROM settings WHERE key='secret';" 2>/dev/null || echo "")
+
+    if [ -f "${XUI_CONFIG_DIR}/install-result.env" ]; then
+        if [ -z "$ADMIN_USER" ]; then
+            ADMIN_USER=$(grep -iE "^(XUI_)?USERNAME=" "${XUI_CONFIG_DIR}/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+        fi
+        if [ -z "$ADMIN_PASS" ]; then
+            ADMIN_PASS=$(grep -iE "^(XUI_)?PASSWORD=" "${XUI_CONFIG_DIR}/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+        fi
+        API_TOKEN=$(grep -iE "^(XUI_)?(API_TOKEN|TOKEN)=" "${XUI_CONFIG_DIR}/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+
+    echo -e ""
+    if [ -n "$ADMIN_USER" ]; then
+        echo -e "  👤 Логин:               ${green}${ADMIN_USER}${plain}"
+    fi
+    if [ -n "$ADMIN_PASS" ]; then
+        echo -e "  🔑 Пароль:              ${green}${ADMIN_PASS}${plain}"
+    elif [ -n "$ADMIN_USER" ]; then
+        echo -e "  🔑 Пароль:              ${yellow}(сохранён в .env / БД)${plain}"
+    fi
+    if [ -n "$API_TOKEN" ]; then
+        echo -e "  🎫 API Token:           ${green}${API_TOKEN}${plain}"
+    fi
+    if [ -n "$SECRET_KEY" ]; then
+        echo -e "  🛡️ Секретный ключ:      ${SECRET_KEY}"
+    fi
     echo -e ""
     echo -e "  Конфигурация: ${yellow}${XUI_ENV_FILE}${plain}"
     echo -e "  Единый CLI: ${yellow}x-ui-fork help${plain}"

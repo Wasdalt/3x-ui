@@ -68,6 +68,24 @@ panel_url() {
         echo "SSH туннель:           ssh -N -L 8080:localhost:${port} user@server-ip"
         echo "Через туннель:         http://localhost:8080${base_path}"
     fi
+
+    admin_user=$(sqlite3 "$DB_PATH" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "")
+    secret_key=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='secret';" 2>/dev/null || echo "")
+    api_token=""
+    if [ -f "/etc/x-ui/install-result.env" ]; then
+        api_token=$(grep -iE "^(XUI_)?(API_TOKEN|TOKEN)=" "/etc/x-ui/install-result.env" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+
+    echo ""
+    if [ -n "$admin_user" ]; then
+        echo "👤 Логин:              ${admin_user}"
+    fi
+    if [ -n "$api_token" ]; then
+        echo "🎫 API Token:          ${api_token}"
+    fi
+    if [ -n "$secret_key" ]; then
+        echo "🛡️ Секретный ключ:     ${secret_key}"
+    fi
 }
 
 show_help() {
