@@ -29,6 +29,14 @@ if [ ! -f "$DB_PATH" ]; then
     exit 0
 fi
 
+# Terminate any lingering orphaned xray/mtg processes from crashed previous runs to free ports
+if command -v pkill >/dev/null 2>&1; then
+    pkill -9 -f "xray-linux-amd64" >/dev/null 2>&1 || true
+    pkill -9 -f "mtg-linux-amd64" >/dev/null 2>&1 || true
+elif command -v killall >/dev/null 2>&1; then
+    killall -q -9 xray-linux-amd64 mtg-linux-amd64 2>/dev/null || true
+fi
+
 echo "Applying environment configuration..."
 
 sqlite_escape() {
