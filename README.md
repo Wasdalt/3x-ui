@@ -33,36 +33,64 @@ sudo bash native-install.sh
 6. Копирует fork-обвязку в `/usr/local/x-ui/` и ставит единый CLI `x-ui-fork`.
 7. Настраивает certbot + автообновление сертификатов через `certbot.timer` или cron fallback.
 
+## Обновление
+
+### 1. Полное обновление (Официальный 3x-ui + Fork-обвязка)
+Рекомендуется для получения новых версий 3x-ui, ядра Xray и всех улучшений fork:
+
+```bash
+cd ~/3x-ui
+git pull
+x-ui-fork update
+```
+- Автоматически создаётся бэкап базы данных `/etc/x-ui/x-ui.db`.
+- Устанавливается свежая версия 3x-ui и Xray от автора.
+- Поверх автоматически накатывается fork-обвязка (`.env`, `init-config.sh`, хуки certbot).
+- > 💡 **Подсказка:** Если установщик в процессе спросит `Choose SSL certificate setup method`, выберите **`4`** (*Skip SSL*), так как SSL настраивается автоматически через `.env` и Certbot.
+
+---
+
+### 2. Быстрое обновление только fork-слоя (1-2 секунды, без простоя)
+Если нужно подтянуть только свежие скрипты, исправления и хуки из репозитория:
+
+```bash
+cd ~/3x-ui
+git pull
+x-ui-fork apply
+```
+
+---
+
+### 3. Откат на конкретную версию автора (Downgrade)
+```bash
+x-ui-fork downgrade 2.4.3
+```
+
+---
+
+## Единый CLI (`x-ui-fork`)
+
+Команда `x-ui-fork` доступна глобально в системе и автоматически запрашивает `sudo` при необходимости:
+
+```bash
+x-ui-fork menu        # открыть официальное меню автора 3x-ui
+x-ui-fork update      # полное обновление (официальный 3x-ui + fork)
+x-ui-fork apply       # быстро применить fork-обвязку (.env/init-config/certbot)
+x-ui-fork downgrade   # откат на конкретную версию (например, 2.4.3)
+x-ui-fork restart     # перезапустить службу x-ui
+x-ui-fork url         # показать актуальные URL панели, статус SSL, логин и пароль
+x-ui-fork env         # показать путь к активному .env
+x-ui-fork help        # показать справку по всем командам
+```
+
 **Применение изменений `.env`:**
 ```bash
-nano .env                        # редактируешь в проекте
-sudo systemctl restart x-ui      # применяется автоматически
+nano .env             # отредактировать в папке проекта
+x-ui-fork restart     # перезапустить и применить
 ```
 
-**Обновление (upstream 3x-ui + fork-слой):**
-```bash
-cd /path/to/3x-ui
-sudo bash native-update.sh
-```
-
-**Единый CLI для upstream + fork:**
-```bash
-x-ui-fork menu        # открыть официальное меню автора (авто-sudo)
-x-ui-fork apply       # применить fork-обвязку (.env/init-config/certbot)
-x-ui-fork update      # обновить официальный 3x-ui и снова применить fork
-x-ui-fork downgrade   # откат на конкретную официальную версию (например, 2.4.3)
-x-ui-fork restart     # перезапустить systemd-сервис x-ui
-x-ui-fork url         # показать актуальные URL панели и статус SSL
-x-ui-fork env         # показать путь активного .env
-```
-
-> Поддерживаемые дистрибутивы: Debian/Ubuntu (`apt`), CentOS/RHEL/Alma/Rocky (`yum`), Alpine (`apk`), Arch Linux/EndeavourOS/Manjaro (`pacman`).
-> Для обновлений используйте `x-ui-fork update` (или `sudo bash native-update.sh`), а не обычный `x-ui update`.
-
-**Удаление .env-дополнений (оставляет 3x-ui):**
-```bash
-sudo bash native-uninstall.sh
-```
+> **Поддерживаемые ОС:** Debian/Ubuntu (`apt`), CentOS/RHEL/Alma/Rocky/Fedora (`yum`/`dnf`), Alpine (`apk`), Arch Linux/EndeavourOS/Manjaro (`pacman`).
+> Для удаления fork-обвязки (с сохранением 3x-ui): `sudo bash native-uninstall.sh`.
 
 ## Основные переменные окружения
 
