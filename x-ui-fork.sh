@@ -11,14 +11,60 @@ yellow='\033[0;33m'
 plain='\033[0m'
 
 PROJECT_DIR_FILE="${XUI_FORK_PROJECT_DIR_FILE:-/etc/x-ui/fork-project-dir}"
-PROJECT_DIR="${XUI_FORK_PROJECT_DIR:-}"
 DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
 
-if [ -z "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR_FILE" ]; then
-    PROJECT_DIR=$(cat "$PROJECT_DIR_FILE")
-fi
+resolve_project_dir() {
+    # 1. Environment variable override
+    if [ -n "${XUI_FORK_PROJECT_DIR:-}" ] && [ -f "${XUI_FORK_PROJECT_DIR}/native-apply.sh" ]; then
+        echo "$XUI_FORK_PROJECT_DIR"
+        return 0
+    fi
 
-[ -n "$PROJECT_DIR" ] || PROJECT_DIR="/home/usermain/project/3x-ui"
+    # 2. Saved project dir file
+    if [ -f "$PROJECT_DIR_FILE" ]; then
+        saved_dir=$(cat "$PROJECT_DIR_FILE" 2>/dev/null || echo "")
+        if [ -n "$saved_dir" ] && [ -f "$saved_dir/native-apply.sh" ]; then
+            echo "$saved_dir"
+            return 0
+        fi
+    fi
+
+    # 3. Follow symlink of current script
+    self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+    self_dir="$(dirname "$self_path")"
+    if [ -f "$self_dir/native-apply.sh" ]; then
+        echo "$self_dir"
+        return 0
+    fi
+
+    # 4. Current working directory
+    if [ -f "$PWD/native-apply.sh" ]; then
+        echo "$PWD"
+        return 0
+    fi
+
+    # 5. Check common user directories
+    for candidate in \
+        "${SUDO_USER:+/home/$SUDO_USER/3x-ui}" \
+        "${SUDO_USER:+/home/$SUDO_USER/project/3x-ui}" \
+        "/home/usermain/3x-ui" \
+        "/home/usermain/project/3x-ui" \
+        "/root/3x-ui" \
+        "$HOME/3x-ui"; do
+        if [ -n "$candidate" ] && [ -f "$candidate/native-apply.sh" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo "/home/usermain/3x-ui"
+}
+
+PROJECT_DIR=$(resolve_project_dir)
+if [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply.sh" ]; then
+    mkdir -p "/etc/x-ui"
+    echo "$PROJECT_DIR" > "$PROJECT_DIR_FILE" 2>/dev/null || true
+fi
 
 need_root() {
     if [[ $EUID -ne 0 ]]; then
