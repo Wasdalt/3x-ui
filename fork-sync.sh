@@ -36,3 +36,4 @@ sync_shell_file() {
 
 sync_shell_file "${PROJECT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
 sync_shell_file "${PROJECT_DIR}/certbot-domain.sh" "${XUI_DIR}/certbot-domain.sh"
+sync_shell_file "${PROJECT_DIR}/fork-db-apply.sh" "${XUI_DIR}/fork-db-apply.sh"

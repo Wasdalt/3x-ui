@@ -26,6 +26,20 @@ if [ $((now - last)) -lt "$DEBOUNCE_SECONDS" ]; then
     exit 0
 fi
 
+INODE_FILE="/run/x-ui-fork-db-apply.inode"
+DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
+
+if [ -f "$DB_PATH" ]; then
+    current_inode=$(stat -c '%i' "$DB_PATH" 2>/dev/null || stat -f '%i' "$DB_PATH" 2>/dev/null || echo 0)
+    last_inode=$(cat "$INODE_FILE" 2>/dev/null || echo 0)
+
+    # If inode is known and unchanged, this is a normal in-place SQLite write (traffic, stats, WAL), not a database restore
+    if [ "$last_inode" != "0" ] && [ "$current_inode" = "$last_inode" ]; then
+        echo "[FORK-DB-APPLY] Skip: database inode unchanged (${current_inode})"
+        exit 0
+    fi
+fi
+
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "[FORK-DB-APPLY] Skip: already running"
     exit 0
@@ -51,7 +65,12 @@ if [ -f "$XUI_ENV_FILE" ]; then
 fi
 
 export XUI_XRAY_CONFIG
+export XUI_SKIP_PKILL=true
 
 if [ -x "${XUI_DIR}/init-config.sh" ]; then
     "${XUI_DIR}/init-config.sh" || echo "[FORK-DB-APPLY] init-config.sh exited non-zero (non-fatal)"
+fi
+
+if [ -n "$current_inode" ] && [ "$current_inode" != "0" ]; then
+    echo "$current_inode" > "$INODE_FILE" 2>/dev/null || true
 fi

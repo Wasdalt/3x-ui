@@ -30,11 +30,34 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 # Terminate any lingering orphaned xray/mtg processes from crashed previous runs to free ports
-if command -v pkill >/dev/null 2>&1; then
-    pkill -9 -f "xray-linux-amd64" >/dev/null 2>&1 || true
-    pkill -9 -f "mtg-linux-amd64" >/dev/null 2>&1 || true
-elif command -v killall >/dev/null 2>&1; then
-    killall -q -9 xray-linux-amd64 mtg-linux-amd64 2>/dev/null || true
+# ONLY if x-ui itself is NOT currently running and orphan cleanup is not explicitly skipped
+if [ "${XUI_SKIP_PKILL:-false}" != "true" ]; then
+    is_xui_running() {
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl is-active --quiet x-ui 2>/dev/null && return 0
+        fi
+        if command -v pgrep >/dev/null 2>&1; then
+            pgrep -f "^/usr/local/x-ui/x-ui" >/dev/null 2>&1 && return 0
+        fi
+        return 1
+    }
+
+    if ! is_xui_running; then
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -9 -f "xray-linux-amd64" >/dev/null 2>&1 || true
+            pkill -9 -f "mtg-linux-amd64" >/dev/null 2>&1 || true
+        elif command -v killall >/dev/null 2>&1; then
+            killall -q -9 xray-linux-amd64 mtg-linux-amd64 2>/dev/null || true
+        fi
+    else
+        echo "[INIT] x-ui service is already running, skipping orphan process cleanup"
+    fi
+fi
+
+# Save current database inode so fork-db-apply can distinguish restores from traffic updates
+INODE_FILE="/run/x-ui-fork-db-apply.inode"
+if [ -f "$DB_PATH" ]; then
+    stat -c '%i' "$DB_PATH" > "$INODE_FILE" 2>/dev/null || true
 fi
 
 echo "Applying environment configuration..."

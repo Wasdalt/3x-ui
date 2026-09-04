@@ -124,6 +124,7 @@ After=x-ui.service
 Type=oneshot
 EnvironmentFile=-${XUI_ENV_FILE}
 Environment=XUI_XRAY_CONFIG=${XUI_DIR}/bin/config.json
+Environment=XUI_SKIP_PKILL=true
 ExecStart=${XUI_DIR}/fork-db-apply.sh
 EOF
 
