@@ -120,6 +120,12 @@ else
         exit 1
     }
     echo -e "${green}  ✓ Зависимости проверены и установлены${plain}"
+    # Отключаем системный дефолтный сайт nginx на 80 порту, чтобы не конфликтовать с certbot/haproxy
+    rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop nginx 2>/dev/null || true
+        systemctl disable nginx 2>/dev/null || true
+    fi
 fi
 
 # ============================================================================

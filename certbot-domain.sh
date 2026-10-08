@@ -82,28 +82,60 @@ certbot_issue_domain_cert() {
 
     echo "[CERT] Requesting Let's Encrypt certificate for ${domain}"
 
-    port_opt=""
-    if ss -tlpn 2>/dev/null | grep -q ':80 ' || netstat -tlpn 2>/dev/null | grep -q ':80 '; then
-        port_opt="--http-01-port 8088"
-    fi
+    run_certbot_attempt() {
+        _d=$1
+        _em=$2
+        _opt=$3
+
+        if is_placeholder_email "$_em"; then
+            certbot certonly --standalone --non-interactive --agree-tos \
+                --register-unsafely-without-email \
+                ${_opt} \
+                -d "$_d" \
+                --preferred-challenges http
+        else
+            certbot certonly --standalone --non-interactive --agree-tos \
+                --email "$_em" --no-eff-email \
+                ${_opt} \
+                -d "$_d" \
+                --preferred-challenges http
+        fi
+    }
 
     issued=0
-    if is_placeholder_email "$email"; then
-        echo "[CERT] XUI_ADMIN_EMAIL is empty or placeholder, using registration without email"
-        if certbot certonly --standalone --non-interactive --agree-tos \
-            --register-unsafely-without-email \
-            ${port_opt} \
-            -d "$domain" \
-            --preferred-challenges http; then
+
+    # 1. Check who is listening on port 80
+    if ss -tlpn 2>/dev/null | grep -E ':80\s' | grep -q 'haproxy'; then
+        echo "[CERT] HAProxy detected on port 80, attempting ACME via 127.0.0.1:8088"
+        if run_certbot_attempt "$domain" "$email" "--http-01-port 8088"; then
+            issued=1
+        fi
+    elif ss -tlpn 2>/dev/null | grep -qE ':80\s'; then
+        # Port 80 is occupied by non-HAProxy service (e.g. system default nginx/apache).
+        echo "[CERT] Port 80 is occupied by non-haproxy service, stopping it temporarily"
+        systemctl stop nginx apache2 httpd 2>/dev/null || true
+        sleep 1
+        if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
             issued=1
         fi
     else
-        if certbot certonly --standalone --non-interactive --agree-tos \
-            --email "$email" --no-eff-email \
-            ${port_opt} \
-            -d "$domain" \
-            --preferred-challenges http; then
+        # Port 80 is free
+        if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
             issued=1
+        fi
+    fi
+
+    # 2. Automatic fallback: if challenge on 8088 or first attempt failed, release port 80 and try directly
+    if [ "$issued" -eq 0 ] && [ ! -f "$cert_path" ]; then
+        echo "[CERT] First attempt failed. Falling back to direct port 80 standalone challenge..."
+        systemctl stop haproxy nginx apache2 httpd 2>/dev/null || true
+        sleep 1
+        if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
+            issued=1
+        fi
+        # Restore haproxy if it was enabled
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled haproxy 2>/dev/null | grep -q 'enabled'; then
+            systemctl start haproxy 2>/dev/null || true
         fi
     fi
 

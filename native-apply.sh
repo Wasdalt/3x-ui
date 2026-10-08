@@ -165,6 +165,14 @@ if [ -f "$XUI_ENV_FILE" ]; then
 fi
 
 export XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
+
+# Отключаем дефолтный системный nginx на 80 порту, чтобы освободить порт для certbot/haproxy
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop nginx 2>/dev/null || true
+    systemctl disable nginx 2>/dev/null || true
+fi
+
 "${XUI_DIR}/init-config.sh"
 
 case "${XUI_HAPROXY_ENABLE:-true}" in
