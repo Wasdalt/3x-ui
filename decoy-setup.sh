@@ -86,7 +86,7 @@ resolve_ssl_certs() {
             cert="$cand_cert"
             key="$cand_key"
         elif command -v certbot >/dev/null 2>&1; then
-            echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..."
+            echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..." >&2
             certbot certonly --standalone -d "$target_domain" --non-interactive --agree-tos --register-unsafely-without-email >/dev/null 2>&1 || true
             if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
                 cert="$cand_cert"
@@ -133,13 +133,32 @@ resolve_ssl_certs() {
         key="$fallback_key"
     fi
 
-    echo "$cert|$key"
+    printf "%s|%s\n" "$cert" "$key"
 }
 
 generate_nginx_conf() {
     ssl_info=$(resolve_ssl_certs)
-    cert=$(echo "$ssl_info" | cut -d'|' -f1)
-    key=$(echo "$ssl_info" | cut -d'|' -f2)
+    cert=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f1 | tr -d '\r\n')
+    key=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f2 | tr -d '\r\n')
+
+    # Double check cert validity
+    if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
+        mkdir -p "/etc/x-ui"
+        cert="/etc/x-ui/fallback-inbound.crt"
+        key="/etc/x-ui/fallback-inbound.key"
+        if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
+            openssl req -x509 -newkey rsa:2048 -nodes \
+                -keyout "$key" -out "$cert" \
+                -days 3650 -subj "/CN=decoy-fallback" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    mime_include=""
+    if [ -f "/etc/nginx/mime.types" ]; then
+        mime_include="include /etc/nginx/mime.types;"
+    elif [ -f "/etc/mime.types" ]; then
+        mime_include="include /etc/mime.types;"
+    fi
 
     mkdir -p "$(dirname "$NGINX_CONF")"
     cat > "$NGINX_CONF" <<EOF
@@ -152,7 +171,7 @@ events {
 }
 
 http {
-    include /etc/nginx/mime.types;
+    ${mime_include}
     default_type application/octet-stream;
     access_log off;
     sendfile on;
@@ -256,12 +275,22 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable x-ui-decoy.service >/dev/null 2>&1 || true
-        systemctl restart x-ui-decoy.service >/dev/null 2>&1 || true
-        echo "[DECOY] Native Nginx service x-ui-decoy.service started on 127.0.0.1:${SELFSTEAL_PORT}"
+        if systemctl restart x-ui-decoy.service; then
+            echo "[DECOY] Native Nginx service x-ui-decoy.service started on 127.0.0.1:${SELFSTEAL_PORT}"
+        else
+            echo "[DECOY-ERROR] Не удалось запустить x-ui-decoy.service с Nginx. Вывод проверки конфига:"
+            ${nginx_bin} -t -c ${NGINX_CONF} || true
+            journalctl -u x-ui-decoy.service -n 10 --no-pager || true
+        fi
     elif [ -n "$python_bin" ] && [ -x "$python_bin" ] && [ -f "${DECOY_ROOT}/decoy-server.py" ]; then
         ssl_info=$(resolve_ssl_certs)
-        cert=$(echo "$ssl_info" | cut -d'|' -f1)
-        key=$(echo "$ssl_info" | cut -d'|' -f2)
+        cert=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f1 | tr -d '\r\n')
+        key=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f2 | tr -d '\r\n')
+
+        if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
+            cert="/etc/x-ui/fallback-inbound.crt"
+            key="/etc/x-ui/fallback-inbound.key"
+        fi
 
         cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -283,8 +312,12 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable x-ui-decoy.service >/dev/null 2>&1 || true
-        systemctl restart x-ui-decoy.service >/dev/null 2>&1 || true
-        echo "[DECOY] Native Python fallback service x-ui-decoy.service started on 127.0.0.1:${SELFSTEAL_PORT}"
+        if systemctl restart x-ui-decoy.service; then
+            echo "[DECOY] Native Python fallback service x-ui-decoy.service started on 127.0.0.1:${SELFSTEAL_PORT}"
+        else
+            echo "[DECOY-ERROR] Не удалось запустить x-ui-decoy.service с Python. Логи:"
+            journalctl -u x-ui-decoy.service -n 10 --no-pager || true
+        fi
     else
         echo "[DECOY-WARN] Neither nginx nor python3 found, cannot start decoy service"
     fi
@@ -305,6 +338,10 @@ check_status() {
         docker ps -f name=3x-decoy
     else
         echo "⚠ Сервис x-ui-decoy не запущен"
+        if command -v journalctl >/dev/null 2>&1; then
+            echo "Последние логи ошибки (journalctl):"
+            journalctl -u x-ui-decoy.service -n 10 --no-pager 2>/dev/null || true
+        fi
     fi
 
     echo ""
