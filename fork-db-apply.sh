@@ -61,11 +61,3 @@ new_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbo
 if [ -n "$new_sig" ]; then
     echo "$new_sig" > "$SIG_FILE" 2>/dev/null || true
 fi
-
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet x-ui 2>/dev/null; then
-    echo "[FORK-DB-APPLY] Restarting x-ui to apply updated database configuration seamlessly..."
-    systemctl restart x-ui || true
-elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3xui_app$"; then
-    echo "[FORK-DB-APPLY] Restarting 3xui_app docker container..."
-    docker restart 3xui_app || true
-fi
