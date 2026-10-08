@@ -129,7 +129,7 @@ certbot_issue_domain_cert() {
         if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
             issued=1
         fi
-        if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled haproxy 2>/dev/null | grep -q 'enabled'; then
+        if command -v systemctl >/dev/null 2>&1; then
             systemctl start haproxy 2>/dev/null || true
         fi
     fi
