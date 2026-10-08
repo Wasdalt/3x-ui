@@ -434,12 +434,25 @@ if systemctl is-active --quiet x-ui; then
     [ -n "$PORT" ] || PORT="2053"
     [ -n "$BASE_PATH" ] || BASE_PATH="/"
     [ -n "$DOMAIN" ] || DOMAIN="localhost"
-    
-    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ] && [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-        echo -e "  📍 Панель (HTTPS):      https://${DOMAIN}:${PORT}${BASE_PATH}"
-        echo -e "  📍 Локально (туннель):  http://localhost:${PORT}${BASE_PATH}"
+    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -n "$LOCAL_IP" ] || LOCAL_IP="127.0.0.1"
+
+    if [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ] && [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
+        if [ "$CERT_FILE" = "/etc/x-ui/fallback-web.crt" ]; then
+            echo -e "  📍 Панель (HTTPS, IP):  https://${LOCAL_IP}:${PORT}${BASE_PATH}"
+            if [ -n "$XUI_DOMAIN" ] && [ "$XUI_DOMAIN" != "localhost" ] && [ "$XUI_DOMAIN" != "$LOCAL_IP" ]; then
+                echo -e "  📍 Домен (fallback):    https://${XUI_DOMAIN}:${PORT}${BASE_PATH}"
+            fi
+            echo -e "  📍 Локально (туннель):  http://localhost:${PORT}${BASE_PATH}"
+            echo -e "  ⚠ Сертификат Let's Encrypt не выпущен — активен самоподписанный SSL с привязкой к IP"
+        elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+            echo -e "  📍 Панель (HTTPS):      https://${DOMAIN}:${PORT}${BASE_PATH}"
+            echo -e "  📍 Локально (туннель):  http://localhost:${PORT}${BASE_PATH}"
+        else
+            echo -e "  📍 Панель (HTTPS):      https://${LOCAL_IP}:${PORT}${BASE_PATH}"
+            echo -e "  📍 Локально (туннель):  http://localhost:${PORT}${BASE_PATH}"
+        fi
     elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
-        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
         echo -e "  📍 Домен (без SSL):     http://${DOMAIN}:${PORT}${BASE_PATH}"
         echo -e "  📍 Локально на сервере: http://localhost:${PORT}${BASE_PATH}"
         if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "127.0.0.1" ]; then
@@ -447,7 +460,6 @@ if systemctl is-active --quiet x-ui; then
         fi
         echo -e "  ⚠ HTTPS не активен: сертификат для ${DOMAIN} не найден на диске"
     else
-        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
         echo -e "  📍 Локально на сервере: http://localhost:${PORT}${BASE_PATH}"
         if [ -n "$LOCAL_IP" ] && [ "$LOCAL_IP" != "127.0.0.1" ]; then
             echo -e "  📍 По сети / через IP:  http://${LOCAL_IP}:${PORT}${BASE_PATH}"

@@ -91,9 +91,18 @@ panel_url() {
     local_ip=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n 1)
     [ -n "$local_ip" ] || local_ip=$(hostname -i 2>/dev/null | awk '{print $1}')
 
-    if [ -n "$domain" ] && [ "$domain" != "localhost" ] && [ -n "$cert_file" ] && [ -n "$key_file" ] && [ -f "$cert_file" ] && [ -f "$key_file" ]; then
-        echo "Панель (HTTPS):        https://${domain}:${port}${base_path}"
-        echo "Локально (туннель):    http://localhost:${port}${base_path}"
+    if [ -n "$cert_file" ] && [ -n "$key_file" ] && [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        if [ "$cert_file" = "/etc/x-ui/fallback-web.crt" ]; then
+            echo "Панель (HTTPS, IP):    https://${local_ip}:${port}${base_path}"
+            echo "Локально (туннель):    http://localhost:${port}${base_path}"
+            echo "⚠ Сертификат Let's Encrypt не выпущен — активен самоподписанный SSL на IP"
+        elif [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
+            echo "Панель (HTTPS):        https://${domain}:${port}${base_path}"
+            echo "Локально (туннель):    http://localhost:${port}${base_path}"
+        else
+            echo "Панель (HTTPS):        https://${local_ip}:${port}${base_path}"
+            echo "Локально (туннель):    http://localhost:${port}${base_path}"
+        fi
     elif [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
         echo "Домен (без SSL):       http://${domain}:${port}${base_path}"
         echo "Локально на сервере:   http://localhost:${port}${base_path}"

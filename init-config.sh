@@ -1218,20 +1218,44 @@ fi
 # HTTP fallback if no SSL domain
 # ============================================================================
 
-if [ -z "$XUI_DOMAIN" ]; then
-    echo "[WARN] No valid domain specified, SSL not configured"
-
-    CERT_FILE=""
-    KEY_FILE=""
-    SUB_DOMAIN=""
-    SUB_CERT_FILE=""
-    SUB_KEY_FILE=""
-
+if [ -z "$CERT_FILE" ] || [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
     if [ "$XUI_ALLOW_HTTP" = "true" ]; then
-        echo "[HTTP] HTTP mode enabled - panel accessible via http://server-ip:${XUI_PORT:-2053}"
+        echo "[HTTP] HTTP mode enabled via XUI_ALLOW_HTTP=true"
+        set_always "webCertFile" ""
+        set_always "webKeyFile" ""
     else
-        echo "[TIP] Use SSH tunnel: ssh -N -L 8080:localhost:${XUI_PORT:-2053} user@server"
-        echo "[TIP] Or set XUI_ALLOW_HTTP=true for HTTP access (insecure!)"
+        fallback_web_cert="/etc/x-ui/fallback-web.crt"
+        fallback_web_key="/etc/x-ui/fallback-web.key"
+        server_ip=$(get_public_ip 2>/dev/null || echo "")
+        [ -z "$server_ip" ] && server_ip=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n 1)
+        [ -z "$server_ip" ] && server_ip="127.0.0.1"
+
+        san_alt="IP:${server_ip}"
+        [ -n "$XUI_DOMAIN" ] && [ "$XUI_DOMAIN" != "localhost" ] && san_alt="${san_alt},DNS:${XUI_DOMAIN}"
+
+        if [ ! -f "$fallback_web_cert" ] || [ ! -f "$fallback_web_key" ]; then
+            openssl req -x509 -newkey rsa:2048 -nodes \
+                -keyout "$fallback_web_key" \
+                -out "$fallback_web_cert" \
+                -days 3650 \
+                -subj "/CN=${server_ip}" \
+                -addext "subjectAltName=${san_alt}" >/dev/null 2>&1 || \
+            openssl req -x509 -newkey rsa:2048 -nodes \
+                -keyout "$fallback_web_key" \
+                -out "$fallback_web_cert" \
+                -days 3650 \
+                -subj "/CN=${server_ip}" >/dev/null 2>&1 || true
+            chmod 600 "$fallback_web_key" 2>/dev/null || true
+            chmod 644 "$fallback_web_cert" 2>/dev/null || true
+        fi
+
+        if [ -f "$fallback_web_cert" ] && [ -f "$fallback_web_key" ]; then
+            CERT_FILE="$fallback_web_cert"
+            KEY_FILE="$fallback_web_key"
+            set_always "webCertFile" "$CERT_FILE"
+            set_always "webKeyFile" "$KEY_FILE"
+            echo "[AUTO-SSL] Using self-signed fallback SSL certificate for panel (${server_ip})"
+        fi
     fi
 fi
 
@@ -1260,7 +1284,11 @@ fi
 
 set_always "webPort" "$XUI_PORT"
 
-effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
+if [ -n "$fallback_web_cert" ] && [ "$CERT_FILE" = "$fallback_web_cert" ]; then
+    effective_domain="$server_ip"
+else
+    effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
+fi
 if [ -n "$effective_domain" ]; then
     set_always "webDomain" "$effective_domain"
 else
