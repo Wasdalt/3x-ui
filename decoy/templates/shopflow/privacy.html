@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Privacy Policy — ShopFlow Global Technologies</title>
-  <meta name="description" content="ShopFlow Global Privacy Policy, GDPR compliance, data subject rights, and security disclosures.">
+  <title>Политика конфиденциальности — ShopFlow</title>
+  <meta name="description" content="Политика обработки персональных данных, соответствие 152-ФЗ и GDPR, защита информации пользователей.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="shortcut icon" href="/favicon.ico">
   <link rel="manifest" href="/site.webmanifest">
@@ -12,28 +12,25 @@
 </head>
 <body>
 
-  <!-- Site Header -->
   <header class="site-header">
     <div class="header-container">
       <a href="/" class="brand-logo">
         <div class="logo-symbol">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/></svg>
         </div>
         <span class="brand-text">ShopFlow</span>
       </a>
 
       <nav>
         <ul class="nav-links">
-          <li><a href="/">Overview</a></li>
-          <li><a href="/solutions.html">Solutions</a></li>
-          <li><a href="/pricing.html">Pricing</a></li>
+          <li><a href="/">Главная</a></li>
+          <li><a href="/solutions.html">Архитектура</a></li>
+          <li><a href="/pricing.html">Тарифы</a></li>
         </ul>
       </nav>
 
       <div class="header-actions">
-        <a href="/" class="btn btn-outline">&larr; Back to Platform</a>
+        <a href="/" class="btn btn-outline">&larr; На главную</a>
       </div>
     </div>
   </header>
@@ -41,40 +38,38 @@
   <main>
     <div class="container">
       <div class="legal-content">
-        <h1>Global Privacy Policy</h1>
+        <h1>Политика конфиденциальности и обработки данных</h1>
         <div class="legal-meta">
-          Effective Date: January 1, 2026 &bull; Last Revised: October 2026 &bull; Version 4.1
+          Дата вступления в силу: 1 января 2026 г. &bull; Версия 4.2
         </div>
 
-        <h2>1. Scope and Identity of Controller</h2>
+        <h2>1. Общие положения</h2>
         <p>
-          This Privacy Notice governs personal data processed by ShopFlow Global Technologies Inc. ("ShopFlow", "we", "us") in connection with our edge dispatch infrastructure, application programming interfaces (APIs), and customer portal accessible via our registered host domains.
+          Настоящая Политика определяет порядок сбора, хранения и защиты информации при использовании облачных сервисов платформы ShopFlow Technologies («ShopFlow»).
         </p>
 
-        <h2>2. Data Collection and Processing Grounds</h2>
+        <h2>2. Категории обрабатываемых данных</h2>
         <p>
-          We act primarily as a Data Processor on behalf of our enterprise merchant subscribers, processing retail order transaction metadata strictly to execute order fulfillment, payment clearing, and inventory sync requests. We collect:
+          Платформа выступает в роли обработчика технических метаданных, необходимых для маршрутизации заказов:
         </p>
         <ul>
-          <li><strong>Technical Metadata:</strong> IP addresses, TLS session cipher configurations, edge gateway round-trip latency, and protocol headers necessary for traffic routing and DDoS prevention.</li>
-          <li><strong>Transaction Records:</strong> Pseudonymized order identifiers, shipping country codes, and transaction token hashes. Full cardholder numbers are never received or retained by ShopFlow servers.</li>
-          <li><strong>Portal Authentication Logs:</strong> FIDO2 credentials, session tokens, and administrative audit trails.</li>
+          <li><strong>Сетевые метаданные:</strong> IP-адреса узлов подключения, версии протоколов TLS, параметры задержки шлюзов и заголовки маршрутизации для предотвращения DDoS-атак.</li>
+          <li><strong>Параметры заказов:</strong> Деперсонализированные идентификаторы заказов, города и индексы пунктов выдачи. Полные номера банковских карт не сохраняются и передаются напрямую в сертифицированные эквайринговые шлюзы.</li>
+          <li><strong>Журналы сессий:</strong> Логи авторизации в панели администратора и события вызова API.</li>
         </ul>
 
-        <h2>3. Data Subject Rights (GDPR & CCPA)</h2>
+        <h2>3. Права субъектов персональных данных</h2>
         <p id="gdpr">
-          Pursuant to European General Data Protection Regulation (Regulation EU 2016/679) and applicable international statutes, individuals have the following enforceable rights:
+          В соответствии с применимым законодательством о защите данных (152-ФЗ, GDPR):
         </p>
         <ul>
-          <li><strong>Right of Access:</strong> You may request verification of whether personal records concerning you are subject to processing.</li>
-          <li><strong>Right to Rectification:</strong> Inaccurate data points will be corrected upon authenticated notice.</li>
-          <li><strong>Right to Erasure ("Right to be Forgotten"):</strong> Personal identifier traces can be expunged from production partitions subject to statutory regulatory ledger hold periods.</li>
-          <li><strong>Right to Data Portability:</strong> Transmission of stored metadata in structured, machine-readable JSON formats.</li>
+          <li>Субъект имеет право на уточнение, блокирование или уничтожение неполных или недостоверных сведений.</li>
+          <li>Все соединения защищены сквозным шифрованием TLS 1.3 с ротацией ключей каждые 24 часа.</li>
         </ul>
 
-        <h2>4. Data Protection Officer (DPO) Contact</h2>
+        <h2>4. Контакты службы информационной безопасности</h2>
         <p>
-          For regulatory inquiries, supervisory authority communications, or exercising statutory rights, contact our Data Protection Officer at:
+          По вопросам безопасности и отзыва согласий направляйте запросы на адрес:
           <br>
           <code style="background:rgba(255,255,255,0.06); padding:0.2rem 0.5rem; border-radius:4px; font-family:var(--font-mono); color:var(--accent-cyan);">dpo@shopflow.io</code>
         </p>
@@ -82,33 +77,10 @@
     </div>
   </main>
 
-  <!-- Site Footer -->
   <footer class="site-footer">
-    <div class="footer-container">
-      <div>
-        <a href="/" class="brand-logo" style="margin-bottom:0.75rem; display:inline-flex;">
-          <div class="logo-symbol">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/></svg>
-          </div>
-          <span class="brand-text">ShopFlow</span>
-        </a>
-        <p class="footer-desc">
-          Unified multi-region commerce architecture.
-        </p>
-      </div>
-
-      <div class="footer-col">
-        <h4>Legal</h4>
-        <ul>
-          <li><a href="/privacy.html">Privacy Policy</a></li>
-          <li><a href="/terms.html">Terms of Service</a></li>
-        </ul>
-      </div>
-    </div>
-
     <div class="footer-bottom">
-      <div>&copy; 2026 ShopFlow Global Technologies Inc. All rights reserved.</div>
-      <div id="systemClockUtc">UTC Time: Synchronizing...</div>
+      <div>&copy; 2026 ShopFlow Technologies. Все права защищены.</div>
+      <div id="systemClockUtc">Время кластера: Синхронизация...</div>
     </div>
   </footer>
 

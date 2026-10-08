@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ShopFlow — Next-Gen Commerce Orchestration & Fulfillment Cloud</title>
-  <meta name="description" content="ShopFlow empowers global brands with sub-second order dispatching, multi-channel payment routing, and real-time inventory intelligence.">
+  <title>ShopFlow — Платформа маршрутизации заказов и облачной коммерции</title>
+  <meta name="description" content="ShopFlow обеспечивает сверхбыструю обработку заказов, маршрутизацию платежей и синхронизацию остатков в реальном времени.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="shortcut icon" href="/favicon.ico">
   <link rel="manifest" href="/site.webmanifest">
@@ -12,7 +12,7 @@
 </head>
 <body>
 
-  <!-- Site Header -->
+  <!-- Шапка сайта -->
   <header class="site-header">
     <div class="header-container">
       <a href="/" class="brand-logo">
@@ -28,22 +28,22 @@
 
       <nav>
         <ul class="nav-links">
-          <li><a href="/" class="active">Overview</a></li>
-          <li><a href="/solutions.html">Solutions</a></li>
-          <li><a href="/pricing.html">Pricing</a></li>
-          <li><a href="#modules">Platform Modules</a></li>
-          <li><a href="#roi-calculator">ROI Estimator</a></li>
+          <li><a href="/" class="active">Главная</a></li>
+          <li><a href="/solutions.html">Архитектура и API</a></li>
+          <li><a href="/pricing.html">Тарифы</a></li>
+          <li><a href="#modules">Модули платформы</a></li>
+          <li><a href="#roi-calculator">Калькулятор экономии</a></li>
         </ul>
       </nav>
 
       <div class="header-actions">
         <div class="status-pill">
           <span class="status-dot"></span>
-          <span>Edge Active</span>
+          <span>Кластер активен</span>
         </div>
-        <button class="btn btn-outline btn-trigger-portal">Customer Portal</button>
-        <button class="btn btn-primary btn-trigger-demo">Request Demo</button>
-        <button class="mobile-toggle" aria-label="Toggle Menu">
+        <button class="btn btn-outline btn-trigger-portal">Личный кабинет</button>
+        <button class="btn btn-primary btn-trigger-demo">Запросить демо</button>
+        <button class="mobile-toggle" aria-label="Меню">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
@@ -53,42 +53,42 @@
   </header>
 
   <main>
-    <!-- Hero Section -->
+    <!-- Главный баннер -->
     <section class="hero-section">
       <div class="hero-content">
         <div class="hero-badge">
-          <span>Enterprise Release 4.8.2</span>
+          <span>Релиз платформы 4.8.2</span>
           <span>&bull;</span>
-          <span>Zero-Drop Failover SLA</span>
+          <span>Отказоустойчивость 99.995%</span>
         </div>
         <h1 class="hero-title">
-          Scale Global Commerce With <span class="grad">Zero Latency</span>
+          Масштабируйте онлайн-ритейл <span class="grad">без задержек</span>
         </h1>
         <p class="hero-lead">
-          Intelligent order dispatching, multi-currency settlement orchestration, and distributed catalog synchronization engineered for high-throughput retail ecosystems.
+          Интеллектуальная диспетчеризация заказов, автоматическое каскадирование платежных шлюзов и синхронизация складских остатков для омниканальной торговли.
         </p>
         <div class="hero-actions">
-          <button class="btn btn-primary btn-trigger-demo">Launch Interactive Sandbox</button>
-          <a href="/pricing.html" class="btn btn-secondary">Explore Tiered Pricing</a>
-          <a href="/solutions.html" class="btn btn-outline">Architecture Specs</a>
+          <button class="btn btn-primary btn-trigger-demo">Открыть демо-песочницу</button>
+          <a href="/pricing.html" class="btn btn-secondary">Планы подписки</a>
+          <a href="/solutions.html" class="btn btn-outline">Спецификация API</a>
         </div>
         <div class="hero-stats-row">
           <div class="stat-item">
             <div class="val">42M+</div>
-            <div class="lbl">Monthly Orders</div>
+            <div class="lbl">Заказов в месяц</div>
           </div>
           <div class="stat-item">
-            <div class="val">&lt; 18ms</div>
-            <div class="lbl">Global API P99</div>
+            <div class="val">&lt; 14 мс</div>
+            <div class="lbl">Задержка API P99</div>
           </div>
           <div class="stat-item">
             <div class="val">99.995%</div>
-            <div class="lbl">Verified Uptime</div>
+            <div class="lbl">Гарантия аптайма</div>
           </div>
         </div>
       </div>
 
-      <!-- Live Terminal Widget -->
+      <!-- Терминал живых заказов -->
       <div class="terminal-card">
         <div class="terminal-header">
           <div class="terminal-dots">
@@ -96,37 +96,37 @@
             <span class="dot-yellow"></span>
             <span class="dot-green"></span>
           </div>
-          <div class="terminal-title">live-stream://edge-orders.shopflow.mesh</div>
-          <div style="font-size:0.75rem; color:var(--accent-emerald);">● CONNECTED</div>
+          <div class="terminal-title">поток-заказов://edge-cluster.shopflow.mesh</div>
+          <div style="font-size:0.75rem; color:var(--accent-emerald);">● В СЕТИ</div>
         </div>
         <div class="terminal-body">
           <div style="color:var(--text-dim); margin-bottom:0.75rem; font-size:0.75rem;">
-            [INFO] Listening on anycast edge cluster 141.98.x.x &bull; TLS 1.3 Strict
+            [Шлюз] Слушатель Anycast узлов активен &bull; TLS 1.3 Strict
           </div>
           <div class="order-stream-list" id="orderStreamList">
-            <!-- Dynamically populated by app.js -->
+            <!-- Заполняется динамически из app.js -->
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Platform Modules Showcase -->
+    <!-- Модули платформы -->
     <section class="container" id="modules">
       <div class="section-header">
-        <div class="section-tag">Modular Architecture</div>
-        <h2 class="section-title">Engineered for Extreme Resilience</h2>
+        <div class="section-tag">Модульная архитектура</div>
+        <h2 class="section-title">Создано для пиковых нагрузок</h2>
         <p class="section-desc">
-          Replace legacy monolithic backends with purpose-built micro-services designed to handle peak Black Friday transaction spikes without degradation.
+          Микросервисная шина, гарантирующая стабильное прохождение транзакций в дни максимальных распродаж без очередей и сбоев.
         </p>
       </div>
 
-      <!-- Category Filter Tabs -->
+      <!-- Вкладки категорий -->
       <div class="category-tabs">
-        <button class="tab-btn active" data-category="all">All Modules</button>
-        <button class="tab-btn" data-category="dispatch">Routing & Dispatch</button>
-        <button class="tab-btn" data-category="payments">Settlement Mesh</button>
-        <button class="tab-btn" data-category="inventory">Catalog Sync</button>
-        <button class="tab-btn" data-category="security">Compliance & Audit</button>
+        <button class="tab-btn active" data-category="all">Все модули</button>
+        <button class="tab-btn" data-category="dispatch">Маршрутизация и доставка</button>
+        <button class="tab-btn" data-category="payments">Платежный шлюз</button>
+        <button class="tab-btn" data-category="inventory">Складские остатки</button>
+        <button class="tab-btn" data-category="security">Безопасность и 54-ФЗ</button>
       </div>
 
       <div class="features-grid">
@@ -136,8 +136,8 @@
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
           </div>
-          <h3 class="card-title">Dynamic Route Optimization</h3>
-          <p class="card-desc">Real-time carrier bidding and geographic zone matching cuts fulfillment delivery expenses by up to 28% automatically.</p>
+          <h3 class="card-title">Динамический выбор курьера</h3>
+          <p class="card-desc">Автоматический аукцион служб доставки в реальном времени снижает затраты на логистику до 26%.</p>
         </div>
 
         <div class="card feature-filterable" data-category="payments">
@@ -147,8 +147,8 @@
               <line x1="1" y1="10" x2="23" y2="10"/>
             </svg>
           </div>
-          <h3 class="card-title">Smart Payment Fallback</h3>
-          <p class="card-desc">Zero-code cascade failover to backup acquiring banks whenever primary gateway latency exceeds 600ms.</p>
+          <h3 class="card-title">Каскадный эквайринг</h3>
+          <p class="card-desc">Мгновенный автоматический переход на резервный банк-эквайер, если задержка основного превышает 500 мс.</p>
         </div>
 
         <div class="card feature-filterable" data-category="inventory">
@@ -157,8 +157,8 @@
               <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
             </svg>
           </div>
-          <h3 class="card-title">Sub-Second Inventory Locks</h3>
-          <p class="card-desc">Distributed consensus guarantees accurate stock levels across marketplaces, physical storefronts, and online apps.</p>
+          <h3 class="card-title">Мгновенный резерв остатков</h3>
+          <p class="card-desc">Распределенная синхронизация исключает оверселлинг между маркетплейсами, сайтом и розничной сетью.</p>
         </div>
 
         <div class="card feature-filterable" data-category="security">
@@ -167,8 +167,8 @@
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
           </div>
-          <h3 class="card-title">PCI-DSS Level 1 Vault</h3>
-          <p class="card-desc">Hardware security module (HSM) tokenization isolates sensitive consumer records outside your server perimeter.</p>
+          <h3 class="card-title">Соответствие PCI-DSS и 152-ФЗ</h3>
+          <p class="card-desc">Токенизация персональных и платежных данных изолирует чувствительную информацию за периметром серверов.</p>
         </div>
 
         <div class="card feature-filterable" data-category="dispatch">
@@ -177,8 +177,8 @@
               <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
             </svg>
           </div>
-          <h3 class="card-title">Automated SLA Alarms</h3>
-          <p class="card-desc">Configurable webhooks and proactive PagerDuty alerting on carrier transit anomalies or shipping hub bottlenecks.</p>
+          <h3 class="card-title">Уведомления о статусах заказов</h3>
+          <p class="card-desc">Вебхуки, Telegram-боты и SMS-интеграции уведомляют покупателя о каждом шаге перемещения посылки.</p>
         </div>
 
         <div class="card feature-filterable" data-category="payments">
@@ -188,44 +188,44 @@
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
             </svg>
           </div>
-          <h3 class="card-title">Multi-Entity Ledger</h3>
-          <p class="card-desc">Cross-border tax calculation and automated reconciliation for entities operating across EU, NA, and APAC tax jurisdictions.</p>
+          <h3 class="card-title">Автоматическая фискализация</h3>
+          <p class="card-desc">Бесшовная передача электронных чеков через ОФД в соответствии с требованиями фискального законодательства.</p>
         </div>
       </div>
     </section>
 
-    <!-- Interactive ROI Calculator -->
+    <!-- Интерактивный калькулятор -->
     <section class="container" id="roi-calculator">
       <div class="calculator-box">
         <div class="calc-inputs">
-          <div class="section-tag">Interactive Cost Model</div>
-          <h2 style="font-size:2rem; margin-bottom:1rem; letter-spacing:-0.02em;">Estimate Your Cloud Savings</h2>
+          <div class="section-tag">Интерактивный расчёт</div>
+          <h2 style="font-size:2rem; margin-bottom:1rem; letter-spacing:-0.02em;">Оцените экономию затрат</h2>
           <p style="color:var(--text-muted); margin-bottom:2rem;">
-            Adjust monthly order throughput to project compute overhead savings and performance gains achieved via ShopFlow Edge dispatching.
+            Передвигайте ползунок ежемесячного объёма заказов, чтобы увидеть расчёт снижения нагрузки на серверы и логистику.
           </p>
 
           <div class="calc-control">
             <div class="calc-label-row">
-              <span>Monthly Order Volume</span>
-              <span id="orderVolumeDisplay" style="color:var(--primary);">75,000 orders / mo</span>
+              <span>Объём заказов в месяц</span>
+              <span id="orderVolumeDisplay" style="color:var(--primary);">75 000 заказов / мес</span>
             </div>
             <input type="range" min="5000" max="500000" step="5000" value="75000" class="calc-slider" id="orderVolumeSlider">
           </div>
         </div>
 
         <div class="calc-summary-card">
-          <div style="font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem;">Estimated Monthly Operational Savings</div>
-          <div class="calc-big-val" id="savingsValueDisplay">$3,150</div>
+          <div style="font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem;">Прогнозируемая ежемесячная экономия</div>
+          <div class="calc-big-val" id="savingsValueDisplay">315 000 ₽</div>
           <div style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.5rem;">
-            Projected average latency: <strong id="latencyValueDisplay" style="color:var(--accent-cyan);">24ms avg</strong>
+            Средняя задержка обработки: <strong id="latencyValueDisplay" style="color:var(--accent-cyan);">22 мс в среднем</strong>
           </div>
-          <button class="btn btn-primary btn-trigger-demo" style="width:100%;">Deploy Custom Plan</button>
+          <button class="btn btn-primary btn-trigger-demo" style="width:100%;">Подключить тариф</button>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- Site Footer -->
+  <!-- Подвал сайта -->
   <footer class="site-footer">
     <div class="footer-container">
       <div>
@@ -236,96 +236,96 @@
           <span class="brand-text">ShopFlow</span>
         </a>
         <p class="footer-desc">
-          Unified multi-region commerce architecture. Empowering enterprise retail with sub-second order fulfillment and automated payment cascade logic.
+          Омниканальная платформа диспетчеризации ритейла. Обработка заказов с гарантированной стабильностью и каскадным эквайрингом.
         </p>
       </div>
 
       <div class="footer-col">
-        <h4>Product</h4>
+        <h4>Продукт</h4>
         <ul>
-          <li><a href="/solutions.html">Global Mesh</a></li>
-          <li><a href="/pricing.html">Pricing Plans</a></li>
-          <li><a href="/solutions.html#architecture">Edge Clusters</a></li>
-          <li><a href="/pricing.html#calculator">ROI Estimator</a></li>
+          <li><a href="/solutions.html">Архитектура сети</a></li>
+          <li><a href="/pricing.html">Тарифные планы</a></li>
+          <li><a href="/solutions.html#architecture">Кластеры серверов</a></li>
+          <li><a href="/pricing.html#calculator">Калькулятор окупаемости</a></li>
         </ul>
       </div>
 
       <div class="footer-col">
-        <h4>Resources</h4>
+        <h4>Ресурсы</h4>
         <ul>
-          <li><a href="/solutions.html#api">API Reference</a></li>
-          <li><a href="https://shopflow.io/robots.txt">Robots.txt</a></li>
-          <li><a href="https://shopflow.io/sitemap.xml">Sitemap</a></li>
-          <li><a href="#" class="btn-trigger-portal">Tenant Portal</a></li>
+          <li><a href="/solutions.html#api">Документация API</a></li>
+          <li><a href="/robots.txt">Robots.txt</a></li>
+          <li><a href="/sitemap.xml">Карта сайта</a></li>
+          <li><a href="#" class="btn-trigger-portal">Кабинет клиента</a></li>
         </ul>
       </div>
 
       <div class="footer-col">
-        <h4>Legal & Trust</h4>
+        <h4>Правовая информация</h4>
         <ul>
-          <li><a href="/privacy.html">Privacy Policy</a></li>
-          <li><a href="/terms.html">Terms of Service</a></li>
-          <li><a href="/privacy.html#gdpr">GDPR Rights</a></li>
-          <li><a href="/terms.html#sla">99.99% SLA</a></li>
+          <li><a href="/privacy.html">Конфиденциальность</a></li>
+          <li><a href="/terms.html">Пользовательское соглашение</a></li>
+          <li><a href="/privacy.html#gdpr">Защита данных (152-ФЗ / GDPR)</a></li>
+          <li><a href="/terms.html#sla">Гарантия аптайма 99.99%</a></li>
         </ul>
       </div>
     </div>
 
     <div class="footer-bottom">
-      <div>&copy; 2026 ShopFlow Global Technologies Inc. All rights reserved. ISO/IEC 27001 Certified.</div>
-      <div id="systemClockUtc">UTC Time: Synchronizing...</div>
+      <div>&copy; 2026 ShopFlow Technologies. Все права защищены. Сертифицировано по ISO/IEC 27001.</div>
+      <div id="systemClockUtc">Время кластера: Синхронизация...</div>
     </div>
   </footer>
 
-  <!-- Demo Modal -->
+  <!-- Модальное окно запроса Демо -->
   <div class="modal-overlay" id="demoModal">
     <div class="modal-content">
       <button class="modal-close" id="closeDemoModal">&times;</button>
-      <h3 style="font-size:1.4rem; margin-bottom:0.5rem;">Request Enterprise Sandbox</h3>
+      <h3 style="font-size:1.4rem; margin-bottom:0.5rem;">Запрос тестового доступа</h3>
       <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.5rem;">
-        Get provisioned access to ShopFlow staging cluster within our European edge zone.
+        Получите тестовый доступ к облачному кластеру ShopFlow для проверки интеграции.
       </p>
       <form id="demoForm">
         <div class="form-group">
-          <label class="form-label">Full Name</label>
-          <input type="text" class="form-input" required placeholder="Alex Mercer">
+          <label class="form-label">Ваше имя</label>
+          <input type="text" class="form-input" required placeholder="Александр Смирнов">
         </div>
         <div class="form-group">
-          <label class="form-label">Corporate Email</label>
-          <input type="email" class="form-input" required placeholder="alex@company.com">
+          <label class="form-label">Рабочий Email</label>
+          <input type="email" class="form-input" required placeholder="alex@company.ru">
         </div>
         <div class="form-group">
-          <label class="form-label">Estimated Monthly Orders</label>
+          <label class="form-label">Объём заказов в месяц</label>
           <select class="form-input" style="background:#0f172a;">
-            <option>10,000 - 50,000</option>
-            <option>50,000 - 250,000</option>
-            <option>250,000+</option>
+            <option>10 000 - 50 000</option>
+            <option>50 000 - 250 000</option>
+            <option>250 000+</option>
           </select>
         </div>
-        <button type="submit" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Provision Access</button>
+        <button type="submit" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Активировать доступ</button>
       </form>
     </div>
   </div>
 
-  <!-- Customer Portal Modal -->
+  <!-- Модальное окно Кабинета -->
   <div class="modal-overlay" id="portalModal">
     <div class="modal-content">
       <button class="modal-close" id="closePortalModal">&times;</button>
-      <h3 style="font-size:1.4rem; margin-bottom:0.5rem;">Customer Portal Authentication</h3>
+      <h3 style="font-size:1.4rem; margin-bottom:0.5rem;">Вход в личный кабинет</h3>
       <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.5rem;">
-        Enter tenant credentials to manage edge routing clusters.
+        Введите данные тенанта для управления маршрутизацией заказов.
       </p>
       <div id="portalErrorBox" style="display:none; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; padding:0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:1rem;"></div>
       <form id="portalForm">
         <div class="form-group">
-          <label class="form-label">Tenant ID or Domain</label>
+          <label class="form-label">ID или домен тенанта</label>
           <input type="text" class="form-input" required value="shopflow.io">
         </div>
         <div class="form-group">
-          <label class="form-label">Security Key / SSO Token</label>
+          <label class="form-label">Ключ безопасности / Токен SSO</label>
           <input type="password" class="form-input" required placeholder="••••••••••••••••">
         </div>
-        <button type="submit" class="btn btn-primary" style="width:100%;">Sign In to Portal</button>
+        <button type="submit" class="btn btn-primary" style="width:100%;">Войти в панель</button>
       </form>
     </div>
   </div>

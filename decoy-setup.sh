@@ -57,12 +57,14 @@ switch_template() {
     fi
 
     mkdir -p "$PUBLIC_DIR"
+    find "$PUBLIC_DIR" -mindepth 1 -not -name '.gitkeep' -delete 2>/dev/null || true
     cp -rf "${TEMPLATES_DIR}/${target}/"* "$PUBLIC_DIR/"
     echo "✓ Шаблон '${target}' успешно установлен в ${PUBLIC_DIR}"
 
     # Also sync to /usr/local/x-ui/decoy if running native
     if [ "$DECOY_ROOT" != "${XUI_DIR}/decoy" ] && [ -d "${XUI_DIR}" ]; then
         mkdir -p "${XUI_DIR}/decoy/public"
+        find "${XUI_DIR}/decoy/public" -mindepth 1 -delete 2>/dev/null || true
         cp -rf "${PUBLIC_DIR}/"* "${XUI_DIR}/decoy/public/" 2>/dev/null || true
     fi
 

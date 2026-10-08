@@ -1,338 +1,161 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vortex Cloud — High-Performance Edge & Cloud Infrastructure</title>
-  <meta name="description" content="Next-generation cloud compute, distributed edge networking, and enterprise Kubernetes solutions with 99.99% uptime SLA.">
-  <style>
-    :root {
-      --bg: #090d16;
-      --card-bg: rgba(18, 25, 41, 0.7);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --accent: #3b82f6;
-      --accent-glow: rgba(59, 130, 246, 0.35);
-      --accent-cyan: #06b6d4;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --radius: 12px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: var(--font);
-      line-height: 1.6;
-      overflow-x: hidden;
-      min-height: 100vh;
-      background-image: 
-        radial-gradient(circle at 15% 15%, rgba(59, 130, 246, 0.12) 0%, transparent 40%),
-        radial-gradient(circle at 85% 75%, rgba(6, 182, 212, 0.1) 0%, transparent 45%);
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 1.25rem 2rem;
-      max-width: 1200px;
-      margin: 0 auto;
-      border-bottom: 1px solid var(--card-border);
-    }
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: var(--text);
-      text-decoration: none;
-    }
-    .logo-icon {
-      width: 28px;
-      height: 28px;
-      background: linear-gradient(135deg, var(--accent), var(--accent-cyan));
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    nav a {
-      color: var(--text-muted);
-      text-decoration: none;
-      margin-left: 1.75rem;
-      font-size: 0.95rem;
-      transition: color 0.2s;
-    }
-    nav a:hover { color: var(--text); }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.6rem 1.25rem;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      font-weight: 500;
-      text-decoration: none;
-      transition: all 0.2s ease;
-      cursor: pointer;
-      border: 1px solid transparent;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, var(--accent), #2563eb);
-      color: #fff;
-      box-shadow: 0 4px 14px var(--accent-glow);
-    }
-    .btn-primary:hover {
-      box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
-      transform: translateY(-1px);
-    }
-    .btn-outline {
-      background: transparent;
-      border-color: var(--card-border);
-      color: var(--text);
-    }
-    .btn-outline:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-    .hero {
-      max-width: 1200px;
-      margin: 4.5rem auto 3rem;
-      padding: 0 2rem;
-      text-align: center;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.35rem 0.85rem;
-      background: rgba(59, 130, 246, 0.1);
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      color: #93c5fd;
-      border-radius: 9999px;
-      font-size: 0.82rem;
-      font-weight: 500;
-      margin-bottom: 1.5rem;
-    }
-    .badge-dot {
-      width: 7px;
-      height: 7px;
-      background-color: #34d399;
-      border-radius: 50%;
-      box-shadow: 0 0 8px #34d399;
-    }
-    h1 {
-      font-size: clamp(2.4rem, 5vw, 3.8rem);
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      line-height: 1.15;
-      margin-bottom: 1.25rem;
-      background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .hero p {
-      color: var(--text-muted);
-      font-size: 1.15rem;
-      max-width: 680px;
-      margin: 0 auto 2.25rem;
-    }
-    .hero-actions {
-      display: flex;
-      justify-content: center;
-      gap: 1rem;
-      margin-bottom: 3.5rem;
-    }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1.25rem;
-      max-width: 1000px;
-      margin: 0 auto 4.5rem;
-      padding: 0 1.5rem;
-    }
-    .stat-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 1.5rem;
-      backdrop-filter: blur(12px);
-    }
-    .stat-num {
-      font-size: 2rem;
-      font-weight: 700;
-      color: var(--text);
-      background: linear-gradient(135deg, #60a5fa, #22d3ee);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      margin-bottom: 0.25rem;
-    }
-    .stat-label {
-      color: var(--text-muted);
-      font-size: 0.88rem;
-    }
-    .features {
-      max-width: 1200px;
-      margin: 0 auto 5rem;
-      padding: 0 2rem;
-    }
-    .features-title {
-      text-align: center;
-      margin-bottom: 2.5rem;
-    }
-    .features-title h2 {
-      font-size: 2rem;
-      font-weight: 700;
-      margin-bottom: 0.5rem;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 1.5rem;
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 2rem;
-      transition: all 0.25s ease;
-      backdrop-filter: blur(12px);
-    }
-    .card:hover {
-      border-color: rgba(59, 130, 246, 0.4);
-      transform: translateY(-3px);
-    }
-    .card-icon {
-      width: 44px;
-      height: 44px;
-      background: rgba(59, 130, 246, 0.15);
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #60a5fa;
-      margin-bottom: 1.25rem;
-    }
-    .card h3 {
-      font-size: 1.2rem;
-      margin-bottom: 0.5rem;
-    }
-    .card p {
-      color: var(--text-muted);
-      font-size: 0.95rem;
-    }
-    footer {
-      border-top: 1px solid var(--card-border);
-      padding: 2.5rem 2rem;
-      text-align: center;
-      color: var(--text-muted);
-      font-size: 0.88rem;
-    }
-    @media (max-width: 768px) {
-      nav { display: none; }
-      .hero { margin-top: 2.5rem; }
-      .hero-actions { flex-direction: column; align-items: stretch; }
-    }
-  </style>
+  <title>Vortex Cloud — Высокопроизводительные облачные серверы NVMe</title>
+  <meta name="description" content="Облачные VPS и выделенные серверы на базе AMD EPYC 9004 и NVMe накопителей. Аптайм 99.99%, запуск инстанса за 45 секунд.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <header>
-    <a href="#" class="logo">
-      <div class="logo-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-        </svg>
-      </div>
-      Vortex Cloud
-    </a>
-    <nav>
-      <a href="#solutions">Solutions</a>
-      <a href="#network">Edge Network</a>
-      <a href="#status">System Status</a>
-      <a href="#docs">Documentation</a>
-    </nav>
-    <a href="#portal" class="btn btn-outline">Client Portal</a>
+
+  <header class="site-header">
+    <div class="header-wrap">
+      <a href="/" class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
+        </div>
+        <span>Vortex Cloud</span>
+      </a>
+
+      <nav>
+        <a href="/" class="active">Серверы</a>
+        <a href="/network.html">Сеть и Looking Glass</a>
+        <a href="/privacy.html">Конфиденциальность</a>
+        <a href="/terms.html">SLA 99.99%</a>
+      </nav>
+    </div>
   </header>
 
-  <main>
-    <section class="hero">
-      <div class="badge">
-        <span class="badge-dot"></span>
-        All 48 Edge Nodes Operational
-      </div>
-      <h1>Ultra-Low Latency Cloud & Edge Infrastructure</h1>
-      <p>Deploy mission-critical distributed workloads across 32 global regions with automated anycast routing, NVMe storage, and wire-speed DDoS filtering.</p>
-      <div class="hero-actions">
-        <a href="#deploy" class="btn btn-primary">Start Free Deployment</a>
-        <a href="#benchmarks" class="btn btn-outline">View Edge Latency Map</a>
+  <main class="container">
+    <div class="hero-box">
+      <div class="hero-tag">Процессоры AMD EPYC 9004 &bull; Диски PCIe Gen5 NVMe</div>
+      <h1>Облачная инфраструктура нового поколения</h1>
+      <p>
+        Развертывайте виртуальные машины и выделенные кластеры в дата-центрах уровня Tier-III с прямыми стыками к магистральным провайдерам.
+      </p>
+    </div>
+
+    <!-- Конфигуратор сервера -->
+    <div class="configurator-card">
+      <div class="config-controls">
+        <h2 style="font-size:1.6rem; margin-bottom:1.5rem;">Конфигуратор тарифа</h2>
+
+        <!-- Ползунок CPU -->
+        <div class="config-group">
+          <div class="config-header">
+            <span>Процессор (vCPU)</span>
+            <span class="slider-val" id="cpuValue">4 vCPU ядра</span>
+          </div>
+          <input type="range" min="1" max="32" value="4" class="range-slider" id="cpuSlider">
+        </div>
+
+        <!-- Ползунок RAM -->
+        <div class="config-group">
+          <div class="config-header">
+            <span>Оперативная память (RAM)</span>
+            <span class="slider-val" id="ramValue">8 ГБ ECC RAM</span>
+          </div>
+          <input type="range" min="2" max="64" step="2" value="8" class="range-slider" id="ramSlider">
+        </div>
+
+        <!-- Ползунок SSD -->
+        <div class="config-group">
+          <div class="config-header">
+            <span>Скоростной накопитель</span>
+            <span class="slider-val" id="ssdValue">80 ГБ NVMe Gen4</span>
+          </div>
+          <input type="range" min="20" max="500" step="10" value="80" class="range-slider" id="ssdSlider">
+        </div>
+
+        <!-- Выбор локации -->
+        <div class="config-group">
+          <div class="config-header"><span>Локация дата-центра</span></div>
+          <div class="location-grid">
+            <button class="loc-btn active" data-location="Хельсинки, Финляндия (HEL-01)">
+              <span>🇫🇮 Хельсинки, FI</span>
+              <span class="ping-tag" data-base="11">11 мс</span>
+            </button>
+            <button class="loc-btn" data-location="Таллин, Эстония (TLL-01)">
+              <span>🇪🇪 Таллин, EE</span>
+              <span class="ping-tag" data-base="15">15 мс</span>
+            </button>
+            <button class="loc-btn" data-location="Франкфурт, Германия (FRA-02)">
+              <span>🇩🇪 Франкфурт, DE</span>
+              <span class="ping-tag" data-base="22">22 мс</span>
+            </button>
+            <button class="loc-btn" data-location="Москва, Россия (MOW-01)">
+              <span>🇷🇺 Москва, RU</span>
+              <span class="ping-tag" data-base="6">6 мс</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div class="stats">
-        <div class="stat-card">
-          <div class="stat-num">99.995%</div>
-          <div class="stat-label">Network Uptime SLA</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-num">&lt; 12ms</div>
-          <div class="stat-label">Global Tier-1 PTT Latency</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-num">4.8 Tbps</div>
-          <div class="stat-label">Total Backbone Capacity</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-num">24/7/365</div>
-          <div class="stat-label">Active SOC Monitoring</div>
-        </div>
-      </div>
-    </section>
+      <!-- Панель сводки -->
+      <div class="summary-panel">
+        <div>
+          <span style="font-size:0.85rem; color:var(--dim); text-transform:uppercase; letter-spacing:0.05em;">Стоимость конфигурации</span>
+          <div class="price-display" id="priceMonthly">3 320 ₽</div>
+          <div class="price-hourly" id="priceHourly">4.61 ₽ / час</div>
 
-    <section class="features" id="solutions">
-      <div class="features-title">
-        <h2>Engineered for Uncompromising Reliability</h2>
-        <p style="color:var(--text-muted)">Architected from the ground up for high-throughput distributed applications.</p>
+          <ul class="spec-list">
+            <li><span>Дата-центр</span><strong id="summaryLoc" style="color:#fff;">Хельсинки, FI</strong></li>
+            <li><span>Процессор</span><strong id="summaryCpu" style="color:#fff;">4 ядра</strong></li>
+            <li><span>Память</span><strong id="summaryRam" style="color:#fff;">8 ГБ</strong></li>
+            <li><span>Накопитель</span><strong id="summarySsd" style="color:#fff;">80 ГБ</strong></li>
+            <li><span>Порт подключения</span><strong style="color:var(--emerald);">10 Гбит/с</strong></li>
+            <li><span>Трафик</span><strong style="color:#fff;">30 ТБ / месяц</strong></li>
+          </ul>
+        </div>
+
+        <button class="btn-deploy" id="deployInstanceBtn">Запустить сервер</button>
       </div>
-      <div class="grid">
-        <div class="card">
-          <div class="card-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-              <line x1="6" y1="6" x2="6.01" y2="6"></line>
-              <line x1="6" y1="18" x2="6.01" y2="18"></line>
-            </svg>
-          </div>
-          <h3>Bare-Metal Edge Clusters</h3>
-          <p>Zero-virtualization overhead with dedicated compute nodes powered by AMD EPYC 9004 series and PCIe 5.0 NVMe storage arrays.</p>
-        </div>
-        <div class="card">
-          <div class="card-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="2" y1="12" x2="22" y2="12"></line>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-            </svg>
-          </div>
-          <h3>Smart BGP & Anycast Mesh</h3>
-          <p>Intelligent routing paths dynamically tuned in real time to avoid congested transit providers and subsea cable anomalies.</p>
-        </div>
-        <div class="card">
-          <div class="card-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            </svg>
-          </div>
-          <h3>Zero-Trust TLS 1.3 Encryption</h3>
-          <p>Strict mutual TLS, hardware HSM key storage, automated Let's Encrypt rotation, and full post-quantum cryptography support.</p>
-        </div>
+    </div>
+
+    <!-- Сетка преимуществ -->
+    <div class="features-grid">
+      <div class="card">
+        <h3 style="font-size:1.2rem; margin-bottom:0.5rem;">⚡ Быстрый старт за 45 секунд</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">Автоматизированные сценарии cloud-init разворачивают выбранный дистрибутив ОС и сетевые маршруты мгновенно.</p>
       </div>
-    </section>
+      <div class="card">
+        <h3 style="font-size:1.2rem; margin-bottom:0.5rem;">🛡️ Защита от DDoS до 3.2 Тбит/с</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">Аппаратная фильтрация очищает трафик от атак уровней L3/L4 и защищает веб-приложения от вредоносных всплесков.</p>
+      </div>
+      <div class="card">
+        <h3 style="font-size:1.2rem; margin-bottom:0.5rem;">🌐 Сеть BGP Anycast</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">Связность с крупнейшими европейскими точками обмена трафиком (DE-CIX, MSK-IX, FICIX) с минимальным пингом.</p>
+      </div>
+    </div>
   </main>
 
-  <footer>
-    <p>&copy; 2026 Vortex Cloud Networks LLC. All rights reserved. ISO/IEC 27001 Certified Infrastructure.</p>
+  <footer class="site-footer">
+    <div class="footer-wrap">
+      <div>&copy; 2026 Vortex Cloud Infrastructure. Все права защищены.</div>
+      <div>
+        <a href="/network.html">Мониторинг сети</a>
+        <a href="/privacy.html">Конфиденциальность</a>
+        <a href="/terms.html">SLA 99.99%</a>
+        <a href="/robots.txt">Robots.txt</a>
+        <a href="/sitemap.xml">Карта сайта</a>
+      </div>
+    </div>
   </footer>
+
+  <!-- Модальное окно терминала запуска -->
+  <div class="modal-overlay" id="deployModal">
+    <div class="terminal-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:0.75rem; margin-bottom:1rem;">
+        <span style="font-size:0.85rem; color:var(--dim);">консоль://vortex-cluster-eu</span>
+        <button id="closeDeployModal" style="background:none; border:none; color:var(--muted); font-size:1.4rem; cursor:pointer;">&times;</button>
+      </div>
+      <div id="deployTerminalBody" style="font-size:0.85rem; min-height:160px;"></div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
 </body>
 </html>

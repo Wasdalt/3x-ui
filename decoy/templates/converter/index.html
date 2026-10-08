@@ -1,232 +1,182 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OmniConvert — Free Online File & Media Converter</title>
-  <meta name="description" content="Fast, private, client-side media and document conversion tool. Convert PDF, JPG, PNG, WEBP, and MP4 directly in your browser.">
-  <style>
-    :root {
-      --bg: #0f172a;
-      --panel: #1e293b;
-      --border: #334155;
-      --primary: #10b981;
-      --primary-hover: #059669;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --radius: 14px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: var(--font);
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    header {
-      padding: 1.25rem 2rem;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      max-width: 1100px;
-      margin: 0 auto;
-      width: 100%;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      font-weight: 700;
-      font-size: 1.2rem;
-      text-decoration: none;
-      color: var(--text);
-    }
-    .brand-icon {
-      background: var(--primary);
-      width: 28px;
-      height: 28px;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    nav a {
-      color: var(--muted);
-      text-decoration: none;
-      margin-left: 1.5rem;
-      font-size: 0.95rem;
-      transition: color 0.2s;
-    }
-    nav a:hover { color: var(--text); }
-    main {
-      flex: 1;
-      max-width: 900px;
-      margin: 3.5rem auto;
-      padding: 0 1.5rem;
-      width: 100%;
-      text-align: center;
-    }
-    h1 {
-      font-size: clamp(2rem, 4vw, 2.8rem);
-      font-weight: 800;
-      margin-bottom: 0.75rem;
-    }
-    .subtitle {
-      color: var(--muted);
-      font-size: 1.1rem;
-      margin-bottom: 2.5rem;
-    }
-    .dropzone {
-      background: var(--panel);
-      border: 2px dashed var(--border);
-      border-radius: var(--radius);
-      padding: 4rem 2rem;
-      transition: all 0.25s;
-      cursor: pointer;
-      margin-bottom: 2rem;
-    }
-    .dropzone:hover {
-      border-color: var(--primary);
-      background: rgba(30, 41, 59, 0.9);
-    }
-    .drop-icon {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 1.25rem;
-      background: rgba(16, 185, 129, 0.15);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--primary);
-    }
-    .drop-btn {
-      display: inline-block;
-      margin-top: 1.25rem;
-      background: var(--primary);
-      color: white;
-      padding: 0.75rem 1.75rem;
-      border-radius: 8px;
-      font-weight: 600;
-      text-decoration: none;
-      transition: background 0.2s;
-    }
-    .drop-btn:hover { background: var(--primary-hover); }
-    .supported-formats {
-      display: flex;
-      justify-content: center;
-      gap: 0.6rem;
-      flex-wrap: wrap;
-      margin-bottom: 4rem;
-    }
-    .pill {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      padding: 0.35rem 0.85rem;
-      border-radius: 9999px;
-      font-size: 0.85rem;
-      color: var(--muted);
-      font-weight: 500;
-    }
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 1.5rem;
-      text-align: left;
-    }
-    .feat-card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.5rem;
-    }
-    .feat-card h3 {
-      font-size: 1.05rem;
-      margin-bottom: 0.5rem;
-    }
-    .feat-card p {
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 2rem;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.85rem;
-    }
-  </style>
+  <title>OmniConvert — Быстрый и безопасный онлайн-конвертер и инструменты</title>
+  <meta name="description" content="Бесплатные приватные инструменты прямо в браузере. Конвертация изображений в WebP/PNG/JPG, форматирование JSON, хеширование SHA-256 и генерация UUID.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <header>
-    <a href="#" class="brand">
-      <div class="brand-icon">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="16 3 21 3 21 8"></polyline>
-          <line x1="4" y1="20" x2="21" y2="3"></line>
-          <polyline points="21 16 21 21 16 21"></polyline>
-          <line x1="15" y1="15" x2="21" y2="21"></line>
-          <line x1="4" y1="4" x2="9" y2="9"></line>
-        </svg>
-      </div>
-      OmniConvert
-    </a>
-    <nav>
-      <a href="#tools">Tools</a>
-      <a href="#api">Developer API</a>
-      <a href="#privacy">Privacy</a>
-    </nav>
+
+  <header class="site-header">
+    <div class="header-wrap">
+      <a href="/" class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <span>OmniConvert</span>
+      </a>
+
+      <nav>
+        <a href="/" class="active">Центр инструментов</a>
+        <a href="/tools.html">Все утилиты</a>
+        <a href="/privacy.html">Конфиденциальность</a>
+        <a href="/terms.html">Условия</a>
+      </nav>
+    </div>
   </header>
 
-  <main>
-    <h1>Convert Any File Format Instantly</h1>
-    <p class="subtitle">Secure, fast, and encrypted file conversion processing up to 500MB without watermarks.</p>
-
-    <div class="dropzone" onclick="alert('Upload functionality is ready. Select a file to process.')">
-      <div class="drop-icon">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="17 8 12 3 7 8"></polyline>
-          <line x1="12" y1="3" x2="12" y2="15"></line>
-        </svg>
-      </div>
-      <h3>Drag & drop your files here</h3>
-      <p style="color:var(--muted); font-size: 0.95rem; margin-top: 0.35rem">or click anywhere to browse from your device</p>
-      <span class="drop-btn">Choose Files</span>
+  <main class="container">
+    <div class="hero-box">
+      <div class="hero-tag">Без отправки на сервер &bull; 100% обработка в браузере</div>
+      <h1>Универсальные веб-инструменты для разработчиков</h1>
+      <p>
+        Конвертируйте графику без потерь, форматируйте JSON и генерируйте криптографические ключи прямо в памяти вашего устройства. Файлы не покидают ваш компьютер.
+      </p>
     </div>
 
-    <div class="supported-formats">
-      <span class="pill">PDF &rarr; DOCX</span>
-      <span class="pill">PNG &rarr; WEBP</span>
-      <span class="pill">HEIC &rarr; JPG</span>
-      <span class="pill">MP4 &rarr; GIF</span>
-      <span class="pill">CSV &rarr; JSON</span>
-      <span class="pill">SVG &rarr; PNG</span>
+    <!-- Вкладки инструментов -->
+    <div class="tool-tabs">
+      <button class="tool-tab-btn active" data-target="panelImage">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        Конвертер изображений
+      </button>
+      <button class="tool-tab-btn" data-target="panelJson">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        Форматирование JSON
+      </button>
+      <button class="tool-tab-btn" data-target="panelCrypto">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        UUID и SHA-256
+      </button>
+      <button class="tool-tab-btn" data-target="panelBase64">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Base64 кодировщик
+      </button>
     </div>
 
-    <div class="features">
-      <div class="feat-card">
-        <h3>🔒 100% Privacy Guarantee</h3>
-        <p>Files are transferred over high-grade TLS 1.3 encryption and automatically expunged within 60 minutes.</p>
+    <!-- Рабочая область -->
+    <div class="workspace-card">
+      <!-- 1. Панель конвертера изображений -->
+      <div class="tool-panel active" id="panelImage">
+        <div class="dropzone" id="imageDropzone">
+          <div class="drop-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <h3>Перетащите или выберите изображение</h3>
+          <p style="color:var(--muted); font-size:0.9rem; margin-top:0.35rem;">Поддерживаются форматы PNG, JPEG, WEBP, GIF, SVG</p>
+          <input type="file" id="imageFileInput" class="file-input-hidden" accept="image/*">
+        </div>
+
+        <div id="imagePreviewBox" style="display:none; align-items:center; gap:1.25rem; background:#090e17; padding:1rem; border-radius:8px; border:1px solid var(--border); margin-bottom:1.5rem;">
+          <img id="previewThumbnail" style="width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid var(--border);" alt="Превью">
+          <div style="flex:1;">
+            <div id="fileMetaInfo" style="font-weight:600; font-size:0.95rem;">image.png</div>
+            <div style="font-size:0.8rem; color:var(--primary);">Готово к локальной растеризации</div>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-group">
+            <label>Целевой формат</label>
+            <select class="form-select" id="targetFormatSelect">
+              <option value="image/webp">WEBP (Максимальное сжатие для веба)</option>
+              <option value="image/png">PNG (Без потери качества)</option>
+              <option value="image/jpeg">JPEG (Стандартный)</option>
+            </select>
+          </div>
+          <div class="control-group" style="display:flex; align-items:flex-end;">
+            <button class="btn btn-primary" id="convertImageBtn" style="width:100%;">Конвертировать файл</button>
+          </div>
+        </div>
+
+        <div class="result-box" id="imageResultBox">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+            <div>
+              <div style="font-weight:700; color:var(--primary); font-size:1.05rem;">Файл успешно обработан</div>
+              <div id="resultStatsInfo" style="color:var(--muted); font-size:0.85rem; margin-top:0.2rem;"></div>
+            </div>
+            <a href="#" class="btn btn-primary" id="imageDownloadLink" style="background:#059669;">Скачать результат</a>
+          </div>
+        </div>
       </div>
-      <div class="feat-card">
-        <h3>⚡ Hardware Acceleration</h3>
-        <p>Parallelized multi-core encoding pipelines ensure conversions complete in milliseconds.</p>
+
+      <!-- 2. Панель JSON -->
+      <div class="tool-panel" id="panelJson">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+          <label style="font-size:0.9rem; font-weight:600; color:var(--muted);">Вставьте JSON для форматирования</label>
+          <span id="jsonStatus" style="font-size:0.85rem; font-weight:600;"></span>
+        </div>
+        <textarea class="form-textarea" id="jsonInput" placeholder='{"сервис":"omniconvert","активен":true,"технологии":["canvas","crypto","wasm"]}'></textarea>
+        <div style="display:flex; gap:0.75rem; margin-top:1rem; flex-wrap:wrap;">
+          <button class="btn btn-primary" id="formatJsonBtn">Форматировать (Pretty Print)</button>
+          <button class="btn btn-secondary" id="minifyJsonBtn">Сжать в строку</button>
+          <button class="btn btn-secondary" id="copyJsonBtn">Скопировать</button>
+        </div>
       </div>
-      <div class="feat-card">
-        <h3>📱 Cross-Platform</h3>
-        <p>Fully compliant with mobile and desktop web standards with zero software installation required.</p>
+
+      <!-- 3. Панель Криптографии -->
+      <div class="tool-panel" id="panelCrypto">
+        <h3 style="margin-bottom:0.75rem; font-size:1.1rem;">Генератор уникальных UUID v4</h3>
+        <div style="background:#090e17; border:1px solid var(--border); border-radius:8px; padding:1rem; display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+          <code id="uuidResultDisplay" style="font-family:var(--mono); color:var(--accent-cyan); font-size:1.1rem; font-weight:700;"></code>
+          <button class="btn btn-secondary" id="genUuidBtn" style="padding:0.4rem 1rem;">Сгенерировать новый</button>
+        </div>
+
+        <h3 style="margin-bottom:0.5rem; font-size:1.1rem;">Расчет контрольной суммы SHA-256</h3>
+        <input type="text" class="form-input" id="hashInputText" placeholder="Введите любой текст для вычисления хэша..." style="margin-bottom:0.75rem;">
+        <div style="background:#090e17; border:1px solid var(--border); border-radius:8px; padding:0.85rem 1rem;">
+          <span style="font-size:0.75rem; color:var(--dim); display:block; margin-bottom:0.25rem;">ХЭШ SHA-256</span>
+          <code id="hashOutputDisplay" style="font-family:var(--mono); color:#34d399; font-size:0.9rem; word-break:break-all;"></code>
+        </div>
+      </div>
+
+      <!-- 4. Панель Base64 -->
+      <div class="tool-panel" id="panelBase64">
+        <label style="font-size:0.9rem; font-weight:600; color:var(--muted); display:block; margin-bottom:0.5rem;">Исходная строка</label>
+        <textarea class="form-textarea" id="base64Input" placeholder="Привет, мир!"></textarea>
+        <div style="display:flex; gap:0.75rem; margin:1rem 0;">
+          <button class="btn btn-primary" id="b64EncodeBtn">Закодировать в Base64</button>
+          <button class="btn btn-secondary" id="b64DecodeBtn">Декодировать из Base64</button>
+        </div>
+        <label style="font-size:0.9rem; font-weight:600; color:var(--muted); display:block; margin-bottom:0.5rem;">Результат</label>
+        <textarea class="form-textarea" id="base64Output" readonly style="min-height:100px; background:#070b12;"></textarea>
+      </div>
+    </div>
+
+    <!-- Преимущества -->
+    <div class="features-grid">
+      <div class="card">
+        <h3 style="margin-bottom:0.5rem; font-size:1.15rem;">🔒 Без передачи по сети</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">Ваши персональные файлы и ключи не покидают компьютер. Все операции выполняются строго в локальной песочнице браузера.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:0.5rem; font-size:1.15rem;">⚡ Аппаратная скорость</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">Использует многопоточные вычисления HTML5 Canvas и Web Crypto API, обрабатывая данные за миллисекунды.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:0.5rem; font-size:1.15rem;">📱 Работа в офлайн-режиме</h3>
+        <p style="color:var(--muted); font-size:0.92rem;">После загрузки страницы инструменты сохраняют полную функциональность даже без активного интернет-соединения.</p>
       </div>
     </div>
   </main>
 
-  <footer>
-    <p>&copy; 2026 OmniConvert Media Labs. Powered by WebAssembly Engine.</p>
+  <footer class="site-footer">
+    <div class="footer-wrap">
+      <div>&copy; 2026 OmniConvert. Открытые веб-стандарты.</div>
+      <div class="footer-links">
+        <a href="/tools.html">Все инструменты</a>
+        <a href="/privacy.html">Конфиденциальность</a>
+        <a href="/terms.html">Условия</a>
+        <a href="/robots.txt">Robots.txt</a>
+        <a href="/sitemap.xml">Карта сайта</a>
+      </div>
+    </div>
   </footer>
+
+  <script src="/js/app.js"></script>
 </body>
 </html>
