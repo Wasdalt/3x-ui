@@ -212,6 +212,7 @@ esac
 
 case "${XUI_SELFSTEAL_ENABLE:-true}" in
     true|TRUE|1|yes|YES|on|ON)
+        systemctl disable --now nginx >/dev/null 2>&1 || true
         if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
             echo -e "${yellow}  Настройка SelfSteal Decoy Site...${plain}"
             "${XUI_DIR}/decoy-setup.sh" apply || true

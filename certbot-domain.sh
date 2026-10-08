@@ -69,6 +69,10 @@ certbot_issue_domain_cert() {
     fi
 
     echo "[CERT] Requesting Let's Encrypt certificate for ${domain}"
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+        systemctl stop nginx 2>/dev/null || true
+        systemctl disable nginx 2>/dev/null || true
+    fi
 
     if is_placeholder_email "$email"; then
         echo "[CERT] XUI_ADMIN_EMAIL is empty or placeholder, using registration without email"
