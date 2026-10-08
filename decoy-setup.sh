@@ -472,11 +472,15 @@ case "${1:-status}" in
     start|restart|apply)
         setup_and_start_service
         ;;
+    preview)
+        port="${2:-8080}"
+        python3 "${DECOY_ROOT}/preview_server.py" "$port"
+        ;;
     status)
         check_status
         ;;
     *)
-        echo "Использование: $0 {status|templates|template <name>|apply}"
+        echo "Использование: $0 {status|templates|template <name>|preview [порт]|apply}"
         exit 1
         ;;
 esac
