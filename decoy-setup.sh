@@ -183,6 +183,7 @@ generate_nginx_conf() {
 
     mkdir -p "$(dirname "$NGINX_CONF")"
     cat > "$NGINX_CONF" <<EOF
+user root;
 worker_processes 1;
 pid /run/x-ui-decoy.pid;
 error_log /var/log/x-ui-decoy.log warn;
@@ -228,10 +229,20 @@ EOF
 }
 
 setup_and_start_service() {
+    # Sync decoy files to system directory if available
+    if [ -d "${SCRIPT_DIR}/decoy" ] && [ "${SCRIPT_DIR}/decoy" != "${XUI_DIR}/decoy" ] && [ -d "$XUI_DIR" ]; then
+        mkdir -p "${XUI_DIR}/decoy"
+        cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/" 2>/dev/null || true
+        chmod -R 755 "${XUI_DIR}/decoy" 2>/dev/null || true
+        PUBLIC_DIR="${XUI_DIR}/decoy/public"
+        TEMPLATES_DIR="${XUI_DIR}/decoy/templates"
+    fi
+
     # 1. Ensure public dir has an index.html
     if [ ! -f "${PUBLIC_DIR}/index.html" ]; then
         switch_template "$SELFSTEAL_TEMPLATE"
     fi
+    chmod -R 755 "$PUBLIC_DIR" 2>/dev/null || true
 
     # 2. Check if running in Docker or Native
     if [ -f "/.dockerenv" ] || ( [ -z "$(command -v systemctl 2>/dev/null)" ] && command -v docker >/dev/null 2>&1 ); then
