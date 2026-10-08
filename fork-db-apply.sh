@@ -17,7 +17,7 @@ DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 [ -f "$DB_PATH" ] || exit 0
 command -v sqlite3 >/dev/null 2>&1 || exit 0
 
-current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 
 if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
@@ -36,7 +36,7 @@ fi
 
 sleep 1
 
-current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 echo "$current_sig" > "$SIG_FILE" 2>/dev/null || true
 
 if [ -x "${XUI_DIR}/fork-sync.sh" ]; then
@@ -57,7 +57,7 @@ if [ -x "${XUI_DIR}/init-config.sh" ]; then
     "${XUI_DIR}/init-config.sh" || echo "[FORK-DB-APPLY] init-config.sh exited non-zero (non-fatal)"
 fi
 
-new_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+new_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 if [ -n "$new_sig" ]; then
     echo "$new_sig" > "$SIG_FILE" 2>/dev/null || true
 fi

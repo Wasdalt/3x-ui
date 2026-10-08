@@ -146,6 +146,8 @@ Description=Watch x-ui database changes for fork configuration
 
 [Path]
 PathChanged=${XUI_CONFIG_DIR}/x-ui.db
+PathModified=${XUI_CONFIG_DIR}/x-ui.db
+PathModified=${XUI_CONFIG_DIR}/x-ui.db-wal
 Unit=x-ui-fork-db-apply.service
 
 [Install]
