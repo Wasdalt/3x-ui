@@ -87,9 +87,11 @@ resolve_ssl_certs() {
             key="$cand_key"
         elif command -v certbot >/dev/null 2>&1; then
             echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..." >&2
-            systemctl stop nginx 2>/dev/null || true
-            systemctl disable nginx 2>/dev/null || true
-            certbot certonly --standalone -d "$target_domain" --non-interactive --agree-tos --register-unsafely-without-email >&2 || true
+            port_opt=""
+            if ss -tlpn 2>/dev/null | grep -q ':80 ' || netstat -tlpn 2>/dev/null | grep -q ':80 '; then
+                port_opt="--http-01-port 8088"
+            fi
+            certbot certonly --standalone -d "$target_domain" --non-interactive --agree-tos --register-unsafely-without-email ${port_opt} >&2 || true
             if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
                 cert="$cand_cert"
                 key="$cand_key"

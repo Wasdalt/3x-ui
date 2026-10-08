@@ -391,18 +391,25 @@ issue_cert_for_domain() {
         return 1
     fi
 
+    port_opt=""
+    if ss -tlpn 2>/dev/null | grep -q ':80 ' || netstat -tlpn 2>/dev/null | grep -q ':80 '; then
+        port_opt="--http-01-port 8088"
+    fi
+
     if [ -z "$email" ] || [ "$email" = "admin@example.com" ]; then
         echo "[AUTO-CERT] XUI_ADMIN_EMAIL not set, using --register-unsafely-without-email"
 
         certbot certonly --standalone --non-interactive --agree-tos \
             --register-unsafely-without-email \
+            ${port_opt} \
             -d "$domain" \
-            --preferred-challenges http
+            --preferred-challenges http || true
     else
         certbot certonly --standalone --non-interactive --agree-tos \
             --email "$email" --no-eff-email \
+            ${port_opt} \
             -d "$domain" \
-            --preferred-challenges http
+            --preferred-challenges http || true
     fi
 }
 
@@ -723,6 +730,14 @@ defaults
     timeout client 30s
     timeout server 30s
 
+frontend fe_http_in
+    bind :80
+    mode http
+    timeout client 10s
+    acl is_acme path_beg /.well-known/acme-challenge/
+    http-request redirect scheme https code 301 unless is_acme
+    use_backend bk_certbot if is_acme
+
 frontend fe_tls_in
     bind :443
     mode tcp
@@ -786,6 +801,15 @@ backend bk_selfsteal
     server srv_decoy 127.0.0.1:${selfsteal_port} check
 EOF_BK_SS
         fi
+
+        cat << 'EOF_BK_CERTBOT' >> "$tmp_cfg"
+
+backend bk_certbot
+    mode http
+    timeout server 10s
+    server srv_certbot 127.0.0.1:8088
+EOF_BK_CERTBOT
+
 
         # Pre-flight syntax validation before applying config
         chmod 644 "$tmp_cfg"

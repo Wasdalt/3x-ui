@@ -38,6 +38,16 @@ is_placeholder_email() {
     esac
 }
 
+configure_certbot_cli_ini() {
+    mkdir -p /etc/letsencrypt
+    cli_ini="/etc/letsencrypt/cli.ini"
+    if [ ! -f "$cli_ini" ]; then
+        echo "http-01-port = 8088" > "$cli_ini" 2>/dev/null || true
+    elif ! grep -q "^http-01-port" "$cli_ini" 2>/dev/null; then
+        echo "http-01-port = 8088" >> "$cli_ini" 2>/dev/null || true
+    fi
+}
+
 certbot_issue_domain_cert() {
     domain=$1
     email=${2:-}
@@ -52,6 +62,8 @@ certbot_issue_domain_cert() {
         return 1
     fi
 
+    configure_certbot_cli_ini
+
     cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     if [ -f "$cert_path" ]; then
         if command -v openssl >/dev/null 2>&1 \
@@ -61,7 +73,7 @@ certbot_issue_domain_cert() {
         fi
 
         echo "[CERT] Certificate for ${domain} is expired or expiring within 24 h — renewing"
-        if certbot renew --cert-name "$domain" --quiet 2>/dev/null; then
+        if certbot renew --cert-name "$domain" --http-01-port 8088 --quiet 2>/dev/null || certbot renew --cert-name "$domain" --quiet 2>/dev/null; then
             echo "[CERT] Certificate for ${domain} renewed successfully"
             return 0
         fi
@@ -69,9 +81,10 @@ certbot_issue_domain_cert() {
     fi
 
     echo "[CERT] Requesting Let's Encrypt certificate for ${domain}"
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
-        systemctl stop nginx 2>/dev/null || true
-        systemctl disable nginx 2>/dev/null || true
+
+    port_opt=""
+    if ss -tlpn 2>/dev/null | grep -q ':80 ' || netstat -tlpn 2>/dev/null | grep -q ':80 '; then
+        port_opt="--http-01-port 8088"
     fi
 
     issued=0
@@ -79,6 +92,7 @@ certbot_issue_domain_cert() {
         echo "[CERT] XUI_ADMIN_EMAIL is empty or placeholder, using registration without email"
         if certbot certonly --standalone --non-interactive --agree-tos \
             --register-unsafely-without-email \
+            ${port_opt} \
             -d "$domain" \
             --preferred-challenges http; then
             issued=1
@@ -86,6 +100,7 @@ certbot_issue_domain_cert() {
     else
         if certbot certonly --standalone --non-interactive --agree-tos \
             --email "$email" --no-eff-email \
+            ${port_opt} \
             -d "$domain" \
             --preferred-challenges http; then
             issued=1
@@ -109,18 +124,11 @@ certbot_install_xui_deploy_hook() {
     mkdir -p "$hook_dir"
     cat > "$hook_path" <<EOF
 #!/bin/sh
-# Reload x-ui after certificate renewal.
-#
-# We send SIGHUP to the running x-ui process instead of doing a full
-# "systemctl restart". x-ui handles SIGHUP in-process (see main.go):
-# it stops/restarts the web server, subscription server, and xray —
-# without forking a new process or re-running ExecStartPre scripts.
-# This cuts reload time from ~10 s down to ~1-2 s and minimises the
-# window during which active proxy connections are dropped.
-#
-# Fallback: if the service is not running or the HUP fails for any
-# reason, a regular restart is attempted so the new cert is always loaded.
+# Reload x-ui and nginx after certificate renewal.
 if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        systemctl reload nginx 2>/dev/null || true
+    fi
     if systemctl is-active --quiet ${service_name} 2>/dev/null; then
         systemctl kill --kill-who=main -s HUP ${service_name} >/dev/null 2>&1 \
             || systemctl restart ${service_name} >/dev/null 2>&1 \
@@ -135,6 +143,7 @@ EOF
 }
 
 certbot_configure_auto_renewal() {
+    configure_certbot_cli_ini
     certbot_install_xui_deploy_hook "$XUI_CERTBOT_DEPLOY_HOOK" "$XUI_SERVICE_NAME"
 
     if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files certbot.timer 2>/dev/null | grep -q '^certbot\.timer'; then
@@ -147,7 +156,7 @@ certbot_configure_auto_renewal() {
 
     if command -v crontab >/dev/null 2>&1; then
         cron_marker="3x-ui certbot auto-renewal"
-        cron_cmd="0 */12 * * * certbot renew --quiet # ${cron_marker}"
+        cron_cmd="0 */12 * * * certbot renew --quiet --http-01-port 8088 # ${cron_marker}"
         (crontab -l 2>/dev/null | grep -v "$cron_marker" || true; echo "$cron_cmd") | crontab -
         echo "[CERT] Auto-renewal enabled via cron"
         return 0
