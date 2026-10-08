@@ -745,16 +745,12 @@ ORDER BY id ASC;
             fi
 
             if [ -n "$clean_snis" ]; then
-                cond=""
-                for s in $clean_snis; do
-                    if [ -z "$cond" ]; then
-                        cond="{ req_ssl_sni -i $s }"
-                    else
-                        cond="$cond || { req_ssl_sni -i $s }"
-                    fi
-                done
+                acl_name="is_in_${id}"
                 bk_name="bk_in_${id}"
-                echo "RULE:    use_backend ${bk_name} if ${cond}" >> "$tmp_parts"
+                for s in $clean_snis; do
+                    echo "RULE:    acl ${acl_name} req_ssl_sni -i ${s}" >> "$tmp_parts"
+                done
+                echo "RULE:    use_backend ${bk_name} if ${acl_name}" >> "$tmp_parts"
                 echo "BACKEND:${bk_name}|${port}" >> "$tmp_parts"
             fi
         done
