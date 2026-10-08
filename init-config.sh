@@ -1091,6 +1091,60 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         SUB_CERT_FILE="$CERT_FILE"
         SUB_KEY_FILE="$KEY_FILE"
     fi
+
+    # Auto-issue SSL certificates for all SelfSteal / Reality inbounds targeting local decoy (10444)
+    if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+        decoy_domains=$(sqlite_db "
+SELECT json_extract(stream_settings, '$.realitySettings.serverNames[0]')
+FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.security') = 'reality'
+  AND (json_extract(stream_settings, '$.realitySettings.target') LIKE '%10444%' OR json_extract(stream_settings, '$.realitySettings.target') LIKE '%127.0.0.1%');
+" 2>/dev/null || true)
+
+        decoy_updated=0
+        for d in $decoy_domains; do
+            [ -n "$d" ] || continue
+            case "$d" in
+                ""|null|localhost|127.0.0.1) continue ;;
+            esac
+            if command -v is_domain_name >/dev/null 2>&1 && is_domain_name "$d"; then
+                # Check if cert already exists and valid
+                if [ -f "/etc/letsencrypt/live/${d}/fullchain.pem" ]; then
+                    if command -v openssl >/dev/null 2>&1 && openssl x509 -in "/etc/letsencrypt/live/${d}/fullchain.pem" -noout -checkend 86400 >/dev/null 2>&1; then
+                        continue
+                    fi
+                fi
+                # Check if covered by any SAN in existing certs
+                covered=0
+                for c_file in /etc/letsencrypt/live/*/fullchain.pem; do
+                    [ -f "$c_file" ] || continue
+                    if openssl x509 -in "$c_file" -noout -text 2>/dev/null | grep -q "DNS:${d}"; then
+                        if openssl x509 -in "$c_file" -noout -checkend 86400 >/dev/null 2>&1; then
+                            covered=1
+                            break
+                        fi
+                    fi
+                done
+                [ "$covered" -eq 1 ] && continue
+
+                # Check if DNS resolves to self before calling certbot
+                if command -v domain_points_to_this_server >/dev/null 2>&1 && domain_points_to_this_server "$d"; then
+                    echo "[AUTO-SSL] Automatically requesting SSL certificate for SelfSteal domain: $d"
+                    if certbot_issue_domain_cert "$d" "$CERTBOT_EMAIL"; then
+                        decoy_updated=1
+                    fi
+                else
+                    echo "[AUTO-SSL] Domain $d does not point to this server yet, skipping certbot"
+                fi
+            fi
+        done
+
+        if [ "$decoy_updated" -eq 1 ] && [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
+            "${XUI_DIR}/decoy-setup.sh" apply >/dev/null 2>&1 || true
+        fi
+    fi
 else
     echo "[AUTO-CERT] certbot is not installed, skipping certificate issue"
 

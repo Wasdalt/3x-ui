@@ -183,6 +183,45 @@ generate_nginx_conf() {
         nginx_http2_line=""
     fi
 
+    extra_servers=""
+    for live_dir in /etc/letsencrypt/live/*; do
+        [ -d "$live_dir" ] || continue
+        c_dom=$(basename "$live_dir")
+        case "$c_dom" in
+            ""|README|*fallback*) continue ;;
+        esac
+        c_cert="${live_dir}/fullchain.pem"
+        c_key="${live_dir}/privkey.pem"
+        if [ -f "$c_cert" ] && [ -f "$c_key" ] && [ "$c_cert" != "$cert" ]; then
+            extra_servers="${extra_servers}
+
+    server {
+        ${nginx_http2_listen}
+        ${nginx_http2_line}
+        server_name ${c_dom};
+
+        ssl_certificate ${c_cert};
+        ssl_certificate_key ${c_key};
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 1d;
+
+        root ${PUBLIC_DIR};
+        index index.html;
+
+        location / {
+            try_files \$uri \$uri/ /index.html =404;
+        }
+
+        location ~ /\. {
+            deny all;
+        }
+    }"
+        fi
+    done
+
     mkdir -p "$(dirname "$NGINX_CONF")"
     cat > "$NGINX_CONF" <<EOF
 user root;
@@ -226,6 +265,7 @@ http {
             deny all;
         }
     }
+${extra_servers}
 }
 EOF
 }
