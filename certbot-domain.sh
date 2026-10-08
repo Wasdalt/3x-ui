@@ -74,17 +74,30 @@ certbot_issue_domain_cert() {
         systemctl disable nginx 2>/dev/null || true
     fi
 
+    issued=0
     if is_placeholder_email "$email"; then
         echo "[CERT] XUI_ADMIN_EMAIL is empty or placeholder, using registration without email"
-        certbot certonly --standalone --non-interactive --agree-tos \
+        if certbot certonly --standalone --non-interactive --agree-tos \
             --register-unsafely-without-email \
             -d "$domain" \
-            --preferred-challenges http
+            --preferred-challenges http; then
+            issued=1
+        fi
     else
-        certbot certonly --standalone --non-interactive --agree-tos \
+        if certbot certonly --standalone --non-interactive --agree-tos \
             --email "$email" --no-eff-email \
             -d "$domain" \
-            --preferred-challenges http
+            --preferred-challenges http; then
+            issued=1
+        fi
+    fi
+
+    if [ "$issued" -eq 1 ] && [ -f "$cert_path" ]; then
+        echo "[CERT] Successfully issued certificate for ${domain}"
+        return 0
+    else
+        echo "[CERT-WARN] Failed to issue certificate for ${domain} (non-fatal)"
+        return 1
     fi
 }
 
