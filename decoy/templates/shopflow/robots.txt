@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/private/
+Disallow: /portal/auth/
+Disallow: /admin/
+
+Sitemap: https://shopflow.io/sitemap.xml

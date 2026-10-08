@@ -26,7 +26,7 @@ NGINX_CONF="/etc/x-ui/nginx-decoy.conf"
 SERVICE_FILE="/etc/systemd/system/x-ui-decoy.service"
 
 SELFSTEAL_PORT="${XUI_SELFSTEAL_PORT:-10444}"
-SELFSTEAL_TEMPLATE="${XUI_SELFSTEAL_TEMPLATE:-tech}"
+SELFSTEAL_TEMPLATE="${XUI_SELFSTEAL_TEMPLATE:-shopflow}"
 
 list_templates() {
     echo "Доступные шаблоны сайта-заглушки (SelfSteal):"
@@ -45,7 +45,7 @@ list_templates() {
 switch_template() {
     target=$1
     if [ -z "$target" ]; then
-        echo "Ошибка: укажите имя шаблона (tech, converter, blog, corporate)"
+        echo "Ошибка: укажите имя шаблона (shopflow, tech, converter, blog, corporate)"
         list_templates
         return 1
     fi
@@ -214,7 +214,22 @@ generate_nginx_conf() {
         index index.html;
 
         location / {
-            try_files \$uri \$uri/ /index.html =404;
+            try_files \$uri \$uri/ \$uri.html /index.html =404;
+        }
+
+        location = /favicon.ico {
+            log_not_found off;
+            access_log off;
+        }
+
+        location = /robots.txt {
+            log_not_found off;
+            access_log off;
+        }
+
+        location /api/health {
+            default_type application/json;
+            return 200 '{"status":"healthy","service":"shopflow-edge","version":"4.8.2"}';
         }
 
         location ~ /\. {
@@ -242,6 +257,8 @@ http {
     sendfile on;
     keepalive_timeout 65;
     server_tokens off;
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
 
     server {
         ${nginx_http2_listen}
@@ -260,7 +277,22 @@ http {
         index index.html;
 
         location / {
-            try_files \$uri \$uri/ /index.html =404;
+            try_files \$uri \$uri/ \$uri.html /index.html =404;
+        }
+
+        location = /favicon.ico {
+            log_not_found off;
+            access_log off;
+        }
+
+        location = /robots.txt {
+            log_not_found off;
+            access_log off;
+        }
+
+        location /api/health {
+            default_type application/json;
+            return 200 '{"status":"healthy","service":"shopflow-edge","version":"4.8.2"}';
         }
 
         location ~ /\. {

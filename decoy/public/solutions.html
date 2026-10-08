@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture & Solutions — ShopFlow Global Mesh</title>
+  <meta name="description" content="Technical overview of ShopFlow Anycast Edge orchestration, Kafka event stream, and multi-region database consistency.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <div class="header-container">
+      <a href="/" class="brand-logo">
+        <div class="logo-symbol">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+          </svg>
+        </div>
+        <span class="brand-text">ShopFlow</span>
+      </a>
+
+      <nav>
+        <ul class="nav-links">
+          <li><a href="/">Overview</a></li>
+          <li><a href="/solutions.html" class="active">Solutions</a></li>
+          <li><a href="/pricing.html">Pricing</a></li>
+          <li><a href="/#modules">Platform Modules</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <button class="btn btn-outline btn-trigger-portal">Customer Portal</button>
+        <button class="btn btn-primary btn-trigger-demo">Request Demo</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">High-Throughput Engineering</div>
+        <h1 class="section-title">Distributed Edge Infrastructure</h1>
+        <p class="section-desc">
+          Zero single-point-of-failure topology across 48 worldwide PoPs connected via dedicated Anycast BGP routing.
+        </p>
+      </div>
+
+      <div class="features-grid" style="margin-bottom:4rem;">
+        <div class="card">
+          <div class="card-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <h3 class="card-title">Anycast Edge Ingestion</h3>
+          <p class="card-desc">Requests terminate at the nearest geographical edge node, executing authorization and TLS handshakes in under 8ms.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+          </div>
+          <h3 class="card-title">Kafka Event Streaming</h3>
+          <p class="card-desc">Partitioned asynchronous messaging buffers millions of parallel inventory decrements without blocking user checkouts.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <h3 class="card-title">Hardware HSM Tokenization</h3>
+          <p class="card-desc">Payment and sensitive shopper records are encrypted via hardware modules meeting FIPS 140-2 Level 3 standards.</p>
+        </div>
+      </div>
+
+      <!-- Developer API Preview -->
+      <div class="calculator-box" id="api" style="grid-template-columns: 1fr;">
+        <div>
+          <div class="section-tag">Developer First</div>
+          <h2 style="font-size:1.8rem; margin-bottom:0.75rem;">Unified Commerce Ingestion Endpoint</h2>
+          <p style="color:var(--text-muted); margin-bottom:1.5rem;">
+            Integrate multichannel orders via idempotent REST or gRPC APIs with automatic signature verification.
+          </p>
+
+          <div style="background:#090d16; border:1px solid var(--border-subtle); border-radius:12px; padding:1.5rem; font-family:var(--font-mono); font-size:0.85rem; overflow-x:auto;">
+            <div style="color:var(--text-dim); margin-bottom:0.75rem;"># Dispatch order across multi-region mesh</div>
+            <div style="color:#a5b4fc;">curl -X POST https://shopflow.io/api/v1/orders/dispatch \</div>
+            <div style="color:#f87171; padding-left:1.5rem;">-H "Authorization: Bearer sec_live_94827103a8f" \</div>
+            <div style="color:#f87171; padding-left:1.5rem;">-H "Content-Type: application/json" \</div>
+            <div style="color:#34d399; padding-left:1.5rem;">-d '{</div>
+            <div style="color:#38bdf8; padding-left:3rem;">"order_id": "ORD-9821-TK",</div>
+            <div style="color:#38bdf8; padding-left:3rem;">"currency": "EUR",</div>
+            <div style="color:#38bdf8; padding-left:3rem;">"items": [{"sku": "TECH-X1", "qty": 2, "unit_price": 249.00}],</div>
+            <div style="color:#38bdf8; padding-left:3rem;">"destination": {"country": "FI", "postal_code": "00100"}</div>
+            <div style="color:#34d399; padding-left:1.5rem;">}'</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div>
+        <a href="/" class="brand-logo" style="margin-bottom:0.75rem; display:inline-flex;">
+          <div class="logo-symbol">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/></svg>
+          </div>
+          <span class="brand-text">ShopFlow</span>
+        </a>
+        <p class="footer-desc">
+          Unified multi-region commerce architecture. Empowering enterprise retail with sub-second order fulfillment.
+        </p>
+      </div>
+
+      <div class="footer-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="/solutions.html">Global Mesh</a></li>
+          <li><a href="/pricing.html">Pricing Plans</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/privacy.html">Privacy Policy</a></li>
+          <li><a href="/terms.html">Terms of Service</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <div>&copy; 2026 ShopFlow Global Technologies Inc. All rights reserved.</div>
+      <div id="systemClockUtc">UTC Time: Synchronizing...</div>
+    </div>
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

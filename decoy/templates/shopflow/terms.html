@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terms of Service — ShopFlow Global Technologies</title>
+  <meta name="description" content="ShopFlow Master Services Agreement, Service Level Agreement (SLA), and acceptable use policy.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <div class="header-container">
+      <a href="/" class="brand-logo">
+        <div class="logo-symbol">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+          </svg>
+        </div>
+        <span class="brand-text">ShopFlow</span>
+      </a>
+
+      <nav>
+        <ul class="nav-links">
+          <li><a href="/">Overview</a></li>
+          <li><a href="/solutions.html">Solutions</a></li>
+          <li><a href="/pricing.html">Pricing</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <a href="/" class="btn btn-outline">&larr; Back to Platform</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="legal-content">
+        <h1>Master Services Agreement & Terms</h1>
+        <div class="legal-meta">
+          Effective Date: January 1, 2026 &bull; Last Revised: October 2026 &bull; Version 3.8
+        </div>
+
+        <h2>1. Acceptance of Terms</h2>
+        <p>
+          By establishing an API connection, provisioning edge tenant clusters, or signing into the ShopFlow management portal, you ("Subscriber" or "Merchant") agree to be irrevocably bound by these Master Service Terms.
+        </p>
+
+        <h2>2. Service Level Agreement (SLA) Guarantee</h2>
+        <p id="sla">
+          ShopFlow commits to maintaining a <strong>99.995% Monthly Service Availability</strong> across our Anycast edge ingestion cluster nodes.
+        </p>
+        <ul>
+          <li><strong>Calculation:</strong> Availability percentage is measured per calendar month excluding scheduled maintenance windows announced with at least 48 hours notice.</li>
+          <li><strong>Service Credits:</strong> If availability drops below 99.995%, Subscriber is eligible for automated billing credits:
+            <ul>
+              <li>&lt; 99.95%: 15% monthly subscription credit</li>
+              <li>&lt; 99.90%: 30% monthly subscription credit</li>
+              <li>&lt; 99.00%: 50% monthly subscription credit</li>
+            </ul>
+          </li>
+        </ul>
+
+        <h2>3. Acceptable Use and Security Responsibilities</h2>
+        <p>
+          Subscriber is solely responsible for securing API tokens and configuring valid webhook TLS validation. Subscriber covenants not to execute load testing or simulated vulnerability assessments against production ingress routers without prior authorization from the Network Operations Center.
+        </p>
+
+        <h2>4. Governing Jurisdiction</h2>
+        <p>
+          These Terms and all disputes arising hereunder shall be construed and governed in accordance with international commercial arbitration standards and applicable enterprise laws.
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div>
+        <a href="/" class="brand-logo" style="margin-bottom:0.75rem; display:inline-flex;">
+          <div class="logo-symbol">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/></svg>
+          </div>
+          <span class="brand-text">ShopFlow</span>
+        </a>
+        <p class="footer-desc">
+          Unified multi-region commerce architecture.
+        </p>
+      </div>
+
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/privacy.html">Privacy Policy</a></li>
+          <li><a href="/terms.html">Terms of Service</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <div>&copy; 2026 ShopFlow Global Technologies Inc. All rights reserved.</div>
+      <div id="systemClockUtc">UTC Time: Synchronizing...</div>
+    </div>
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

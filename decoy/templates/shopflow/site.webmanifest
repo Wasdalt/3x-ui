@@ -1,0 +1,15 @@
+{
+  "name": "ShopFlow Commerce Cloud",
+  "short_name": "ShopFlow",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#6366f1"
+}
