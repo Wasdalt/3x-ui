@@ -688,30 +688,22 @@ WHERE enable = 1
     fi
 
     # Fix Vision TCP TLS inbounds having invalid h2/h3 ALPN
-    vision_inbounds=$(sqlite_db -separator '|' "
-SELECT id, stream_settings, settings
-FROM inbounds
+    sqlite_db "
+UPDATE inbounds
+SET stream_settings = json_set(stream_settings, '$.tlsSettings.alpn', json('[\"http/1.1\"]'))
 WHERE enable = 1
   AND json_valid(stream_settings)
+  AND json_valid(settings)
   AND json_extract(stream_settings, '$.network') = 'tcp'
-  AND json_extract(stream_settings, '$.security') = 'tls';
-" 2>/dev/null || true)
-    if [ -n "$vision_inbounds" ]; then
-        printf "%s\n" "$vision_inbounds" | while IFS='|' read -r v_id v_stream v_settings; do
-            [ -n "$v_id" ] || continue
-            if echo "$v_settings" | jq -e '.clients[]? | select(.flow == "xtls-rprx-vision")' >/dev/null 2>&1; then
-                cur_alpn=$(echo "$v_stream" | jq -r '.tlsSettings.alpn[]?' 2>/dev/null | tr '\n' ' ')
-                if echo "$cur_alpn" | grep -qE '\b(h2|h3)\b'; then
-                    echo "[AUTO-FIX] Fixing Vision inbound id=${v_id}: ALPN contains h2/h3 which breaks XTLS-Vision -> resetting to http/1.1"
-                    fixed_stream=$(echo "$v_stream" | jq -c '.tlsSettings.alpn = ["http/1.1"]' 2>/dev/null || echo "")
-                    if [ -n "$fixed_stream" ]; then
-                        esc_fixed_stream=$(sqlite_escape "$fixed_stream")
-                        sqlite_db "UPDATE inbounds SET stream_settings = '${esc_fixed_stream}' WHERE id = ${v_id};"
-                    fi
-                fi
-            fi
-        done
-    fi
+  AND json_extract(stream_settings, '$.security') = 'tls'
+  AND EXISTS (
+    SELECT 1 FROM json_each(settings, '$.clients')
+    WHERE json_extract(value, '$.flow') = 'xtls-rprx-vision'
+  )
+  AND (
+    stream_settings LIKE '%\"h2\"%' OR stream_settings LIKE '%\"h3\"%'
+  );
+" 2>/dev/null || true
 
     # 4. Generate HAProxy configuration from active inbounds
     rows=$(sqlite_db -separator '|' "
@@ -1481,9 +1473,9 @@ XRAY_CONFIG="${XUI_XRAY_CONFIG:-/app/bin/config.json}"
 if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_XRAY_LOG_LEVEL" ]; then
     echo "Configuring Xray logging..."
 
-    for i in $(seq 1 30); do
+    for i in $(seq 1 4); do
         [ -f "$XRAY_CONFIG" ] && break
-        sleep 0.5
+        sleep 0.25
     done
 
     if [ ! -f "$XRAY_CONFIG" ]; then
