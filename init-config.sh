@@ -625,6 +625,37 @@ WHERE key = 'xrayTemplateConfig'
         sqlite_db "UPDATE inbounds SET port = 10443 WHERE id = ${inbound_443};"
     fi
 
+    # 3.1 Prevent Reality loop: if Reality target points to port 443 on current domain, rewrite to 127.0.0.1:${selfsteal_port}
+    selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
+    reality_rows=$(sqlite_db -separator '|' "
+SELECT id, stream_settings
+FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.security') = 'reality';
+" 2>/dev/null || true)
+
+    if [ -n "$reality_rows" ]; then
+        printf "%s\n" "$reality_rows" | while IFS='|' read -r r_id r_stream; do
+            [ -n "$r_id" ] || continue
+            cur_target=$(echo "$r_stream" | jq -r '.realitySettings.target // ""' 2>/dev/null || echo "")
+            case "$cur_target" in
+                *:443|443)
+                    t_host=$(echo "$cur_target" | cut -d: -f1)
+                    if [ "$t_host" = "443" ] || [ "$t_host" = "127.0.0.1" ] || [ "$t_host" = "localhost" ] || [ -z "$t_host" ] || [ "$t_host" = "$target_domain" ] || [ "$t_host" = "${XUI_HAPROXY_DOMAIN:-}" ] || [ "$t_host" = "${XUI_SELFSTEAL_DOMAIN:-}" ]; then
+                        echo "[HAPROXY] Fixing Reality inbound id=${r_id} target '${cur_target}' -> 127.0.0.1:${selfsteal_port_safe} to prevent loop"
+                        new_stream=$(echo "$r_stream" | jq -c --arg tgt "127.0.0.1:${selfsteal_port_safe}" '.realitySettings.target = $tgt' 2>/dev/null || echo "")
+                        if [ -n "$new_stream" ]; then
+                            esc_new_stream=$(sqlite_escape "$new_stream")
+                            sqlite_db "UPDATE inbounds SET stream_settings = '${esc_new_stream}' WHERE id = ${r_id};"
+                        fi
+                    fi
+                    ;;
+            esac
+        done
+    fi
+
+
     # 4. Generate HAProxy configuration from active inbounds
     rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, stream_settings
