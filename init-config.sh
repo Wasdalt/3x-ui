@@ -704,14 +704,38 @@ frontend fe_tls_in
     # SNI Routing for 3x-ui inbounds
 EOF_HAPROXY_HEAD
 
-        grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
-        def_bk=$(grep "^BACKEND:" "$tmp_parts" 2>/dev/null | head -n 1 | cut -d: -f2 | cut -d'|' -f1 || echo "")
+        # SelfSteal Decoy Site integration
+        selfsteal_enabled=0
+        case "${XUI_SELFSTEAL_ENABLE:-true}" in
+            true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
+        esac
 
-        cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
+        selfsteal_domain="${XUI_SELFSTEAL_DOMAIN:-${target_domain}}"
+        selfsteal_port="${XUI_SELFSTEAL_PORT:-10444}"
+
+        grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
+
+        if [ "$selfsteal_enabled" -eq 1 ]; then
+            # If target_domain is not explicitly routed to an inbound, route it to SelfSteal decoy
+            if ! grep -q -- "-i ${selfsteal_domain}" "$tmp_cfg" 2>/dev/null; then
+                cat << EOF_SS_RULE >> "$tmp_cfg"
+    use_backend bk_selfsteal if { req_ssl_sni -i ${selfsteal_domain} }
+EOF_SS_RULE
+            fi
+
+            cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
+
+    # Default fallback: SelfSteal Decoy Site (active probing / non-Reality / direct IP)
+    default_backend bk_selfsteal
+EOF_HAPROXY_DEF
+        else
+            def_bk=$(grep "^BACKEND:" "$tmp_parts" 2>/dev/null | head -n 1 | cut -d: -f2 | cut -d'|' -f1 || echo "")
+            cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
 
     # Default fallback: first available Reality/TLS inbound
     default_backend ${def_bk:-bk_default}
 EOF_HAPROXY_DEF
+        fi
 
         grep "^BACKEND:" "$tmp_parts" 2>/dev/null | while IFS='|' read -r raw_bk port; do
             bk=$(echo "$raw_bk" | cut -d: -f2)
@@ -722,6 +746,15 @@ backend ${bk}
     server srv1 127.0.0.1:${port}
 EOF_BK
         done
+
+        if [ "$selfsteal_enabled" -eq 1 ]; then
+            cat << EOF_BK_SS >> "$tmp_cfg"
+
+backend bk_selfsteal
+    mode tcp
+    server srv_decoy 127.0.0.1:${selfsteal_port} check
+EOF_BK_SS
+        fi
 
         # Pre-flight syntax validation before applying config
         chmod 644 "$tmp_cfg"
@@ -776,6 +809,22 @@ EOF_BK
                     docker run -d --name 3x-haproxy --restart always --net=host --user 0:0 \
                         -v "/etc/x-ui:/etc/x-ui:ro" haproxy:alpine haproxy -W -db -f /etc/x-ui/haproxy.cfg >/dev/null 2>&1 || true
                     echo "[HAPROXY] Created and started 3x-haproxy docker container"
+                fi
+            fi
+
+            # Ensure SelfSteal Decoy service is active if enabled
+            if [ "$selfsteal_enabled" -eq 1 ]; then
+                decoy_script=""
+                if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+                    decoy_script="${SCRIPT_DIR}/decoy-setup.sh"
+                elif [ -f "/usr/local/x-ui/decoy-setup.sh" ]; then
+                    decoy_script="/usr/local/x-ui/decoy-setup.sh"
+                elif [ -f "/app/decoy-setup.sh" ]; then
+                    decoy_script="/app/decoy-setup.sh"
+                fi
+                if [ -n "$decoy_script" ]; then
+                    echo "[HAPROXY-SELFSTEAL] Applying SelfSteal decoy service (${selfsteal_domain} -> 127.0.0.1:${selfsteal_port})..."
+                    sh "$decoy_script" apply >/dev/null 2>&1 || true
                 fi
             fi
         fi

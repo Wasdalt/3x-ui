@@ -61,6 +61,18 @@ if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
     echo -e "${green}  ✓ x-ui-fork обновлён${plain}"
 fi
 
+if [ -d "${SCRIPT_DIR}/decoy" ]; then
+    mkdir -p "${XUI_DIR}/decoy"
+    cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/"
+    echo -e "${green}  ✓ decoy templates обновлены${plain}"
+fi
+
+if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+    cp -f "${SCRIPT_DIR}/decoy-setup.sh" "${XUI_DIR}/decoy-setup.sh"
+    chmod +x "${XUI_DIR}/decoy-setup.sh"
+    echo -e "${green}  ✓ decoy-setup.sh обновлён${plain}"
+fi
+
 if [ -f "${SCRIPT_DIR}/.env" ]; then
     ln -sf "${SCRIPT_DIR}/.env" "$XUI_ENV_FILE"
     echo -e "${green}  ✓ ${XUI_ENV_FILE} → ${SCRIPT_DIR}/.env${plain}"
@@ -195,6 +207,16 @@ case "${XUI_HAPROXY_ENABLE:-true}" in
         ;;
     *)
         echo -e "${yellow}  HAProxy отключен (XUI_HAPROXY_ENABLE=${XUI_HAPROXY_ENABLE})${plain}"
+        ;;
+esac
+
+case "${XUI_SELFSTEAL_ENABLE:-true}" in
+    true|TRUE|1|yes|YES|on|ON)
+        if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
+            echo -e "${yellow}  Настройка SelfSteal Decoy Site...${plain}"
+            "${XUI_DIR}/decoy-setup.sh" apply || true
+            echo -e "${green}  ✓ SelfSteal Decoy Site настроен и запущен${plain}"
+        fi
         ;;
 esac
 

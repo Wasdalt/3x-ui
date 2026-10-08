@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alexey Danilov — Systems & Distributed Networks</title>
+  <meta name="description" content="Personal engineering blog focused on low-level Linux networking, eBPF, TCP/IP congestion control, and scalable infrastructure.">
+  <style>
+    :root {
+      --bg: #fafafa;
+      --surface: #ffffff;
+      --border: #e5e5e5;
+      --text: #171717;
+      --muted: #737373;
+      --accent: #2563eb;
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121212;
+        --surface: #1e1e1e;
+        --border: #2e2e2e;
+        --text: #ededed;
+        --muted: #a1a1aa;
+        --accent: #3b82f6;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.65;
+      padding: 0 1.5rem;
+    }
+    .wrapper {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 3.5rem 0 5rem;
+    }
+    header {
+      margin-bottom: 3.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 2rem;
+    }
+    .profile-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .profile-bio {
+      color: var(--muted);
+      font-size: 0.98rem;
+      margin-bottom: 1.25rem;
+    }
+    .social-links {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.88rem;
+    }
+    .social-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .social-links a:hover { text-decoration: underline; }
+    .section-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 1.5rem;
+      font-weight: 600;
+    }
+    .articles {
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+    .article-item {
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    .article-meta {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .article-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.35;
+      margin-bottom: 0.4rem;
+      transition: color 0.15s;
+    }
+    .article-item:hover .article-title {
+      color: var(--accent);
+    }
+    .article-snippet {
+      font-size: 0.94rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <header>
+      <h1 class="profile-title">Alexey Danilov</h1>
+      <p class="profile-bio">Staff Site Reliability Engineer & Open Source Hacker. Researching high-throughput Linux network stacks, eBPF telemetry, and TCP BBRv3 congestion dynamics.</p>
+      <div class="social-links">
+        <a href="#github">GitHub</a>
+        <a href="#twitter">Twitter / X</a>
+        <a href="#pgp">PGP Key</a>
+        <a href="#rss">RSS Feed</a>
+      </div>
+    </header>
+
+    <main>
+      <div class="section-title">Selected Writings</div>
+      <div class="articles">
+        <a href="#article1" class="article-item">
+          <div class="article-meta">Oct 3, 2026 &bull; 9 min read &bull; Networking</div>
+          <h2 class="article-title">Demystifying Zero-Copy Packet Forwarding with XDP and AF_XDP</h2>
+          <p class="article-snippet">How bypassing traditional kernel sk_buff overhead unlocks 40Gbps line-rate wire filtering on commodity server hardware.</p>
+        </a>
+
+        <a href="#article2" class="article-item">
+          <div class="article-meta">Aug 18, 2026 &bull; 14 min read &bull; Distributed Systems</div>
+          <h2 class="article-title">BGP Anycast at Scale: Failover Strategies and Route Flap Damping</h2>
+          <p class="article-snippet">An architectural breakdown of edge router multi-homing when mitigating upstream peering blackholes and transit jitter.</p>
+        </a>
+
+        <a href="#article3" class="article-item">
+          <div class="article-meta">Jun 12, 2026 &bull; 7 min read &bull; Linux Performance</div>
+          <h2 class="article-title">Benchmarking NVMe-oF Over RoCE v2 in Modern Enterprise Clusters</h2>
+          <p class="article-snippet">Evaluating tail latency regressions in remote block storage access under heavy parallel workloads.</p>
+        </a>
+      </div>
+    </main>
+
+    <footer>
+      <span>&copy; 2026 Alexey Danilov</span>
+      <span>Published with Hugo Static Engine</span>
+    </footer>
+  </div>
+</body>
+</html>

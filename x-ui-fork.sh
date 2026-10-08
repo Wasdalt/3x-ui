@@ -162,6 +162,7 @@ Commands:
   log       Show live logs (journalctl / docker)
   backup    Create instant database backup
   haproxy   Show HAProxy container/service status, logs and config
+  selfsteal Manage SelfSteal decoy website (status, templates, template <name>)
   url       Print current panel URL from DB
   env       Print active .env path
   help      Show this help
@@ -228,8 +229,13 @@ case "${1:-help}" in
                 echo -e "${green}=== Статус haproxy ===${plain}"
                 systemctl status haproxy --no-pager || true
             fi
+            if systemctl is-active --quiet x-ui-decoy 2>/dev/null; then
+                echo ""
+                echo -e "${green}=== Статус x-ui-decoy (SelfSteal) ===${plain}"
+                systemctl status x-ui-decoy --no-pager || true
+            fi
         elif command -v docker >/dev/null 2>&1; then
-            docker ps -f name=3xui_app -f name=3x-haproxy
+            docker ps -f name=3xui_app -f name=3x-haproxy -f name=3x-decoy
         fi
         ;;
     log|logs)
@@ -279,6 +285,22 @@ case "${1:-help}" in
             cat /etc/x-ui/haproxy.cfg 2>/dev/null || echo "Конфиг не найден"
         else
             echo -e "${yellow}HAProxy не запущен (ни как сервис systemd, ни в Docker)${plain}"
+        fi
+        ;;
+    selfsteal|decoy)
+        need_root
+        decoy_script=""
+        if [ -f "${PROJECT_DIR}/decoy-setup.sh" ]; then
+            decoy_script="${PROJECT_DIR}/decoy-setup.sh"
+        elif [ -f "/usr/local/x-ui/decoy-setup.sh" ]; then
+            decoy_script="/usr/local/x-ui/decoy-setup.sh"
+        fi
+        if [ -n "$decoy_script" ] && [ -x "$decoy_script" ]; then
+            shift
+            exec "$decoy_script" "$@"
+        else
+            echo -e "${red}decoy-setup.sh не найден в ${PROJECT_DIR} или /usr/local/x-ui${plain}"
+            exit 1
         fi
         ;;
     env)

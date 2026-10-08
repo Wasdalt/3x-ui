@@ -60,8 +60,8 @@ echo ""
 # ============================================================================
 echo -e "${yellow}[1/6] Установка зависимостей...${plain}"
 
-if command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v certbot >/dev/null 2>&1 && (command -v haproxy >/dev/null 2>&1 || command -v docker >/dev/null 2>&1); then
-    echo -e "${green}  ✓ sqlite3, jq, certbot, haproxy уже установлены${plain}"
+if command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v certbot >/dev/null 2>&1 && (command -v haproxy >/dev/null 2>&1 || command -v docker >/dev/null 2>&1) && (command -v nginx >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1); then
+    echo -e "${green}  ✓ sqlite3, jq, certbot, haproxy, nginx уже установлены${plain}"
 else
     wait_for_apt_lock() {
         if command -v fuser >/dev/null 2>&1; then
@@ -85,22 +85,27 @@ else
             export DEBIAN_FRONTEND=noninteractive
             wait_for_apt_lock
             apt-get update -y -qq || true
+            apt-get install -y -qq sqlite3 jq certbot cron haproxy nginx > /dev/null 2>&1 || \
             apt-get install -y -qq sqlite3 jq certbot cron haproxy > /dev/null 2>&1 || \
             apt-get install -y -qq sqlite3 jq certbot cron > /dev/null 2>&1 || \
             apt-get install -y sqlite3 jq
         elif command -v dnf > /dev/null 2>&1; then
+            dnf install -y -q sqlite jq certbot cronie haproxy nginx > /dev/null 2>&1 || \
             dnf install -y -q sqlite jq certbot cronie haproxy > /dev/null 2>&1 || \
             dnf install -y -q sqlite jq certbot cronie > /dev/null 2>&1 || \
             dnf install -y sqlite jq
         elif command -v yum > /dev/null 2>&1; then
+            yum install -y -q sqlite jq certbot cronie haproxy nginx > /dev/null 2>&1 || \
             yum install -y -q sqlite jq certbot cronie haproxy > /dev/null 2>&1 || \
             yum install -y -q sqlite jq certbot cronie > /dev/null 2>&1 || \
             yum install -y sqlite jq
         elif command -v apk > /dev/null 2>&1; then
+            apk add --no-cache sqlite jq certbot haproxy nginx > /dev/null 2>&1 || \
             apk add --no-cache sqlite jq certbot haproxy > /dev/null 2>&1 || \
             apk add --no-cache sqlite jq certbot > /dev/null 2>&1 || \
             apk add --no-cache sqlite jq
         elif command -v pacman > /dev/null 2>&1; then
+            pacman -Sy --noconfirm sqlite jq certbot cronie haproxy nginx > /dev/null 2>&1 || \
             pacman -Sy --noconfirm sqlite jq certbot cronie haproxy > /dev/null 2>&1 || \
             pacman -Sy --noconfirm sqlite jq certbot cronie > /dev/null 2>&1 || \
             pacman -Sy --noconfirm sqlite jq
@@ -222,6 +227,16 @@ if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
     chmod +x "${SCRIPT_DIR}/x-ui-fork.sh"
     ln -sf "${SCRIPT_DIR}/x-ui-fork.sh" "${XUI_FORK_CLI}"
     echo "${SCRIPT_DIR}" > "${XUI_FORK_PROJECT_FILE}"
+fi
+if [ -d "${SCRIPT_DIR}/decoy" ]; then
+    mkdir -p "${XUI_DIR}/decoy"
+    cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/"
+    echo -e "${green}  ✓ decoy templates скопированы в ${XUI_DIR}/decoy/${plain}"
+fi
+if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+    cp -f "${SCRIPT_DIR}/decoy-setup.sh" "${XUI_DIR}/decoy-setup.sh"
+    chmod +x "${XUI_DIR}/decoy-setup.sh"
+    echo -e "${green}  ✓ decoy-setup.sh скопирован в ${XUI_DIR}/${plain}"
 fi
 mkdir -p "${XUI_DIR}/xray-logs"
 echo -e "${green}  ✓ init-config.sh скопирован в ${XUI_DIR}/${plain}"
