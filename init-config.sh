@@ -751,19 +751,32 @@ EOF_BK
                 if [ -d "/etc/haproxy" ]; then
                     cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
                 fi
-
-                # Reload HAProxy (supports native systemd service or Docker container)
-                if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet haproxy 2>/dev/null; then
-                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
-                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
-                elif command -v docker >/dev/null 2>&1; then
-                    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
-                        docker kill -s USR2 3x-haproxy >/dev/null 2>&1 || docker restart 3x-haproxy >/dev/null 2>&1 || true
-                        echo "[HAPROXY] Reloaded 3x-haproxy docker container (seamless USR2)"
-                    fi
-                fi
             else
                 echo "[HAPROXY] Configuration ${haproxy_cfg_file} is up-to-date"
+            fi
+
+            # Ensure HAProxy is running and up-to-date (native systemd or Docker container)
+            if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+                if systemctl is-active --quiet haproxy 2>/dev/null; then
+                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
+                else
+                    systemctl enable haproxy >/dev/null 2>&1 || true
+                    systemctl restart haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Started native systemd haproxy.service"
+                fi
+            elif command -v docker >/dev/null 2>&1; then
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+                    docker kill -s USR2 3x-haproxy >/dev/null 2>&1 || docker restart 3x-haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Reloaded 3x-haproxy docker container (seamless USR2)"
+                elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+                    docker start 3x-haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Started existing 3x-haproxy docker container"
+                else
+                    docker run -d --name 3x-haproxy --restart always --net=host --user 0:0 \
+                        -v "/etc/x-ui:/etc/x-ui:ro" haproxy:alpine haproxy -W -db -f /etc/x-ui/haproxy.cfg >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Created and started 3x-haproxy docker container"
+                fi
             fi
         fi
 
