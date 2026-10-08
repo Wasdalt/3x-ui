@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # ============================================================================
 # Apply fork DB/env configuration after x-ui database changes.
 # Auto-syncs HAProxy routing and settings seamlessly on every panel change.
@@ -24,9 +24,9 @@ if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig"
     exit 0
 fi
 
-exec 200>"$LOCK_FILE"
+exec 9>"$LOCK_FILE"
 if command -v flock >/dev/null 2>&1; then
-    flock -n 200 || exit 0
+    flock -n 9 || exit 0
 fi
 
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
