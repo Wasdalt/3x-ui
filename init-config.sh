@@ -1033,6 +1033,14 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
 
         echo "[DOMAIN] Final domain saved to DB: $FINAL_DOMAIN"
         echo "[DOMAIN] Certificate paths saved to DB"
+
+        # Ensure certificate for XUI_HAPROXY_DOMAIN if set and different
+        if [ -n "$XUI_HAPROXY_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "$FINAL_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "${SUB_DOMAIN:-}" ]; then
+            if command -v is_domain_name >/dev/null 2>&1 && is_domain_name "$XUI_HAPROXY_DOMAIN"; then
+                echo "[DOMAIN] Requesting certificate for HAProxy/SelfSteal domain: $XUI_HAPROXY_DOMAIN"
+                certbot_issue_domain_cert "$XUI_HAPROXY_DOMAIN" "$CERTBOT_EMAIL" || true
+            fi
+        fi
     else
         echo "[DOMAIN] Certbot validation skipped or not matching. Preserving domain configuration."
 

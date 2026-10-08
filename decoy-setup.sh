@@ -79,12 +79,19 @@ resolve_ssl_certs() {
     cert=""
     key=""
 
-    if [ -n "$target_domain" ]; then
+    if [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "localhost" ]; then
         cand_cert="/etc/letsencrypt/live/${target_domain}/fullchain.pem"
         cand_key="/etc/letsencrypt/live/${target_domain}/privkey.pem"
         if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
             cert="$cand_cert"
             key="$cand_key"
+        elif command -v certbot >/dev/null 2>&1; then
+            echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..."
+            certbot certonly --standalone -d "$target_domain" --non-interactive --agree-tos --register-unsafely-without-email >/dev/null 2>&1 || true
+            if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
+                cert="$cand_cert"
+                key="$cand_key"
+            fi
         fi
     fi
 
