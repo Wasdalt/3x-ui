@@ -304,25 +304,21 @@ EOF
     fi
 fi
 
-# Бэкап оригинала
 if [ ! -f "${XUI_SERVICE}.bak" ]; then
     cp "${XUI_SERVICE}" "${XUI_SERVICE}.bak"
     echo -e "  Бэкап: ${XUI_SERVICE}.bak"
 fi
 
-# Добавляем EnvironmentFile для нашего .env (проверяем именно наш путь)
 if ! grep -q "${XUI_ENV_FILE}" "${XUI_SERVICE}"; then
     sed -i "/\[Service\]/a EnvironmentFile=-${XUI_ENV_FILE}" "${XUI_SERVICE}"
     echo -e "${green}  ✓ EnvironmentFile добавлен${plain}"
 fi
 
-# Добавляем переменные для нативных путей
 if ! grep -q "XUI_XRAY_CONFIG" "${XUI_SERVICE}"; then
     sed -i "/EnvironmentFile/a Environment=XUI_XRAY_CONFIG=${XUI_DIR}/bin/config.json" "${XUI_SERVICE}"
     echo -e "${green}  ✓ XUI_XRAY_CONFIG задан${plain}"
 fi
 
-# Добавляем ExecStartPre для init-config.sh (если ещё нет)
 if ! grep -q "init-config.sh" "${XUI_SERVICE}"; then
     sed -i "/^ExecStart=/i ExecStartPre=${XUI_DIR}/init-config.sh" "${XUI_SERVICE}"
     echo -e "${green}  ✓ ExecStartPre добавлен${plain}"

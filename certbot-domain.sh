@@ -104,14 +104,12 @@ certbot_issue_domain_cert() {
 
     issued=0
 
-    # 1. Check who is listening on port 80
     if ss -tlpn 2>/dev/null | grep -E ':80\s' | grep -q 'haproxy'; then
         echo "[CERT] HAProxy detected on port 80, attempting ACME via 127.0.0.1:8088"
         if run_certbot_attempt "$domain" "$email" "--http-01-port 8088"; then
             issued=1
         fi
     elif ss -tlpn 2>/dev/null | grep -qE ':80\s'; then
-        # Port 80 is occupied by non-HAProxy service (e.g. system default nginx/apache).
         echo "[CERT] Port 80 is occupied by non-haproxy service, stopping it temporarily"
         systemctl stop nginx apache2 httpd 2>/dev/null || true
         sleep 1
@@ -119,13 +117,11 @@ certbot_issue_domain_cert() {
             issued=1
         fi
     else
-        # Port 80 is free
         if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
             issued=1
         fi
     fi
 
-    # 2. Automatic fallback: if challenge on 8088 or first attempt failed, release port 80 and try directly
     if [ "$issued" -eq 0 ] && [ ! -f "$cert_path" ]; then
         echo "[CERT] First attempt failed. Falling back to direct port 80 standalone challenge..."
         systemctl stop haproxy nginx apache2 httpd 2>/dev/null || true
@@ -133,7 +129,6 @@ certbot_issue_domain_cert() {
         if run_certbot_attempt "$domain" "$email" "--http-01-port 80"; then
             issued=1
         fi
-        # Restore haproxy if it was enabled
         if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled haproxy 2>/dev/null | grep -q 'enabled'; then
             systemctl start haproxy 2>/dev/null || true
         fi

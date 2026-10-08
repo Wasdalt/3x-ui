@@ -14,13 +14,11 @@ PROJECT_DIR_FILE="${XUI_FORK_PROJECT_DIR_FILE:-/etc/x-ui/fork-project-dir}"
 DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
 
 resolve_project_dir() {
-    # 1. Environment variable override
     if [ -n "${XUI_FORK_PROJECT_DIR:-}" ] && [ -f "${XUI_FORK_PROJECT_DIR}/native-apply.sh" ]; then
         echo "$XUI_FORK_PROJECT_DIR"
         return 0
     fi
 
-    # 2. Saved project dir file
     if [ -f "$PROJECT_DIR_FILE" ]; then
         saved_dir=$(cat "$PROJECT_DIR_FILE" 2>/dev/null || echo "")
         if [ -n "$saved_dir" ] && [ -f "$saved_dir/native-apply.sh" ]; then
@@ -29,7 +27,6 @@ resolve_project_dir() {
         fi
     fi
 
-    # 3. Follow symlink of current script
     self_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
     self_dir="$(dirname "$self_path")"
     if [ -f "$self_dir/native-apply.sh" ]; then
@@ -37,13 +34,11 @@ resolve_project_dir() {
         return 0
     fi
 
-    # 4. Current working directory
     if [ -f "$PWD/native-apply.sh" ]; then
         echo "$PWD"
         return 0
     fi
 
-    # 5. Check common user directories
     for candidate in \
         "${SUDO_USER:+/home/$SUDO_USER/3x-ui}" \
         "${SUDO_USER:+/home/$SUDO_USER/project/3x-ui}" \

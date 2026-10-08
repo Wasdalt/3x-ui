@@ -63,7 +63,6 @@ switch_template() {
     echo "$target" > "${PUBLIC_DIR}/.current_template"
     echo "✓ Шаблон '${target}' успешно установлен в ${PUBLIC_DIR}"
 
-    # Also sync to /usr/local/x-ui/decoy if running native
     if [ "$DECOY_ROOT" != "${XUI_DIR}/decoy" ] && [ -d "${XUI_DIR}" ] && [ -w "${XUI_DIR}" ]; then
         mkdir -p "${XUI_DIR}/decoy/public" 2>/dev/null || true
         find "${XUI_DIR}/decoy/public" -mindepth 1 -delete 2>/dev/null || true
@@ -71,7 +70,6 @@ switch_template() {
         echo "$target" > "${XUI_DIR}/decoy/public/.current_template" 2>/dev/null || true
     fi
 
-    # Update .env if accessible
     real_env="$(readlink -f "$ENV_FILE" 2>/dev/null || echo "$ENV_FILE")"
     if [ -f "$real_env" ] && [ -w "$real_env" ]; then
         if grep -q "^XUI_SELFSTEAL_TEMPLATE=" "$real_env"; then
@@ -321,7 +319,6 @@ EOF
 }
 
 setup_and_start_service() {
-    # Sync decoy files to system directory if available
     if [ -d "${SCRIPT_DIR}/decoy" ] && [ "${SCRIPT_DIR}/decoy" != "${XUI_DIR}/decoy" ] && [ -d "$XUI_DIR" ]; then
         mkdir -p "${XUI_DIR}/decoy"
         cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/" 2>/dev/null || true
@@ -330,7 +327,6 @@ setup_and_start_service() {
         TEMPLATES_DIR="${XUI_DIR}/decoy/templates"
     fi
 
-    # 1. Ensure public dir has the active template from .env
     current_installed=""
     [ -f "${PUBLIC_DIR}/.current_template" ] && current_installed="$(cat "${PUBLIC_DIR}/.current_template" 2>/dev/null)"
     if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
@@ -338,9 +334,7 @@ setup_and_start_service() {
     fi
     chmod -R 755 "$PUBLIC_DIR" 2>/dev/null || true
 
-    # 2. Check if running in Docker or Native
     if [ -f "/.dockerenv" ] || ( [ -z "$(command -v systemctl 2>/dev/null)" ] && command -v docker >/dev/null 2>&1 ); then
-        # Docker mode
         echo "[DECOY] Configuring Docker container 3x-decoy..."
         generate_nginx_conf
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-decoy$"; then
@@ -359,7 +353,6 @@ setup_and_start_service() {
         return 0
     fi
 
-    # Native mode (systemd)
     if ! command -v nginx >/dev/null 2>&1; then
         echo "[DECOY] Nginx не найден, попытка автоматической установки..."
         if command -v apt-get >/dev/null 2>&1; then

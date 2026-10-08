@@ -17,31 +17,25 @@ DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 [ -f "$DB_PATH" ] || exit 0
 command -v sqlite3 >/dev/null 2>&1 || exit 0
 
-# 1. Fast check: compute hash signature of inbounds and core settings
 current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 
-# If structure is unchanged (routine traffic stats or logs), exit immediately (0ms)
 if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
     exit 0
 fi
 
-# 2. Acquire lock so only one apply runs at a time
 exec 200>"$LOCK_FILE"
 if command -v flock >/dev/null 2>&1; then
     flock -n 200 || exit 0
 fi
 
-# Re-check signature under lock in case another process already applied it
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
     exit 0
 fi
 
-# Brief 1s delay for SQLite transactions to fully commit
 sleep 1
 
-# Re-read signature after settling
 current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 echo "$current_sig" > "$SIG_FILE" 2>/dev/null || true
 
@@ -63,7 +57,6 @@ if [ -x "${XUI_DIR}/init-config.sh" ]; then
     "${XUI_DIR}/init-config.sh" || echo "[FORK-DB-APPLY] init-config.sh exited non-zero (non-fatal)"
 fi
 
-# Update signature again if init-config.sh performed self-healing (e.g. port shift or target loop fix)
 new_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 if [ -n "$new_sig" ]; then
     echo "$new_sig" > "$SIG_FILE" 2>/dev/null || true

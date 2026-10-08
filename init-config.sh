@@ -298,17 +298,12 @@ resolve_domain_a_records() {
 }
 
 get_all_server_ips() {
-    # 1. All IPv4 addresses from local network interfaces (excluding loopback, docker, link-local)
     if command -v ip >/dev/null 2>&1; then
         ip -4 addr show 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | grep -vE '^(127\.|172\.(1[7-9]|2[0-9]|3[0-1])\.|169\.254\.)' || true
     elif command -v hostname >/dev/null 2>&1; then
         hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(127\.|172\.(1[7-9]|2[0-9]|3[0-1])\.|169\.254\.)' || true
     fi
-
-    # 2. Public outbound IP (for 1:1 NAT / cloud VPC setups)
     get_public_ip || true
-
-    # 3. Explicit server IP from .env if defined
     [ -n "${XUI_SERVER_IP:-}" ] && echo "$XUI_SERVER_IP"
 }
 
@@ -443,9 +438,6 @@ try_use_domain() {
     cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
     key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
 
-    # If a valid certificate already exists, use it without requiring a DNS check.
-    # A temporary external IP API failure (ipify/ifconfig.me) would otherwise clear
-    # the cert paths from the DB and break SSL for all clients.
     if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
         echo "[AUTO-CERT] Existing certificate found for $domain"
 
@@ -455,10 +447,8 @@ try_use_domain() {
         fi
 
         echo "[AUTO-CERT] Existing certificate is invalid for $domain, trying to reissue"
-        # Fall through to DNS check before reissuing
     fi
 
-    # DNS check is only required when we need to issue (or reissue) a certificate.
     if ! domain_points_to_this_server "$domain"; then
         echo "[DOMAIN] Rejecting $domain: DNS does not point to this server"
         return 1
@@ -635,7 +625,6 @@ sync_haproxy_and_hosts() {
         target_domain="${discovered_ip:-127.0.0.1}"
     fi
 
-    # 2. Prevent port 11111 collision with Happ proxy client in xrayTemplateConfig
     sqlite_db "
 UPDATE settings
 SET value = json_set(value, '$.metrics.listen', '127.0.0.1:61111')
@@ -644,14 +633,12 @@ WHERE key = 'xrayTemplateConfig'
   AND json_extract(value, '$.metrics.listen') = '127.0.0.1:11111';
 " >/dev/null 2>&1 || true
 
-    # 3. Shift any TCP inbound from port 443 to internal port 10443 so HAProxy can bind 443
     inbound_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol != 'hysteria' LIMIT 1;" 2>/dev/null || echo "")
     if [ -n "$inbound_443" ]; then
         echo "[HAPROXY] Inbound id=${inbound_443} is listening on 443, shifting to internal port 10443 for HAProxy"
         sqlite_db "UPDATE inbounds SET port = 10443 WHERE id = ${inbound_443};"
     fi
 
-    # 3.1 Prevent Reality loop: if Reality target points to port 443 on current domain, rewrite to 127.0.0.1:${selfsteal_port}
     selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
     reality_rows=$(sqlite_db -separator '|' "
 SELECT id, stream_settings
@@ -1027,8 +1014,6 @@ fi
 if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/dev/null 2>&1; then
     CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
 
-    # 1. If ENV_DOMAIN is set and differs from DB_DOMAIN,
-    #    treat ENV_DOMAIN as an intentional domain change.
     if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != "$DB_DOMAIN" ]; then
         echo "[DOMAIN] Env domain differs from database domain"
         echo "[DOMAIN] Database domain: ${DB_DOMAIN:-none}"
@@ -1044,7 +1029,6 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         fi
     fi
 
-    # 2. If ENV_DOMAIN was not selected, try DB_DOMAIN.
     if [ -z "$FINAL_DOMAIN" ] && [ -n "$DB_DOMAIN" ]; then
         echo "[DOMAIN] Trying database domain: $DB_DOMAIN"
 
@@ -1056,8 +1040,6 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         fi
     fi
 
-    # 3. If there is no DB_DOMAIN or DB_DOMAIN failed,
-    #    try ENV_DOMAIN as a final fallback.
     if [ -z "$FINAL_DOMAIN" ] && [ -n "$ENV_DOMAIN" ]; then
         echo "[DOMAIN] Trying env domain as fallback: $ENV_DOMAIN"
 
