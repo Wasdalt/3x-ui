@@ -679,10 +679,10 @@ WHERE enable = 1
 ORDER BY id ASC;
 " 2>/dev/null || true)
 
-    if [ -n "$rows" ]; then
-        tmp_cfg=$(mktemp)
-        tmp_parts=$(mktemp)
+    tmp_cfg=$(mktemp)
+    tmp_parts=$(mktemp)
 
+    if [ -n "$rows" ]; then
         printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
             [ -n "$id" ] || continue
             sec=$(echo "$stream" | jq -r '.security // ""' 2>/dev/null || echo "")
@@ -722,6 +722,7 @@ ORDER BY id ASC;
                 echo "BACKEND:${bk_name}|${port}" >> "$tmp_parts"
             fi
         done
+    fi
 
         cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
 global
@@ -784,8 +785,8 @@ EOF_HAPROXY_DEF
             def_bk=$(grep "^BACKEND:" "$tmp_parts" 2>/dev/null | head -n 1 | cut -d: -f2 | cut -d'|' -f1 || echo "")
             cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
 
-    # Default fallback: first available Reality/TLS inbound
-    default_backend ${def_bk:-bk_default}
+    # Default fallback: first available Reality/TLS inbound or certbot backend
+    default_backend ${def_bk:-bk_certbot}
 EOF_HAPROXY_DEF
         fi
 
@@ -891,7 +892,6 @@ EOF_BK_CERTBOT
         fi
 
         rm -f "$tmp_cfg" "$tmp_parts"
-    fi
 
     # 5. Synchronize hosts table (nodes for subscriptions)
     echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
@@ -1127,6 +1127,14 @@ WHERE enable = 1
   AND json_extract(stream_settings, '$.security') = 'reality'
   AND (json_extract(stream_settings, '$.realitySettings.target') LIKE '%10444%' OR json_extract(stream_settings, '$.realitySettings.target') LIKE '%127.0.0.1%');
 " 2>/dev/null || true)
+
+        for extra_d in "${XUI_SELFSTEAL_DOMAIN:-}" "${XUI_HAPROXY_DOMAIN:-}"; do
+            [ -n "$extra_d" ] || continue
+            case "$extra_d" in
+                ""|null|localhost|127.0.0.1) continue ;;
+            esac
+            decoy_domains="${decoy_domains} ${extra_d}"
+        done
 
         decoy_updated=0
         for d in $decoy_domains; do

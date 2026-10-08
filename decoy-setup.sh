@@ -99,6 +99,17 @@ resolve_ssl_certs() {
         if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
             cert="$cand_cert"
             key="$cand_key"
+        elif command -v certbot_issue_domain_cert >/dev/null 2>&1 || [ -f "${SCRIPT_DIR}/certbot-domain.sh" ] || [ -f "${XUI_DIR}/certbot-domain.sh" ]; then
+            if ! command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+                # shellcheck disable=SC1090
+                . "${SCRIPT_DIR}/certbot-domain.sh" 2>/dev/null || . "${XUI_DIR}/certbot-domain.sh" 2>/dev/null || true
+            fi
+            echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..." >&2
+            certbot_issue_domain_cert "$target_domain" "${XUI_ADMIN_EMAIL:-}" >&2 || true
+            if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
+                cert="$cand_cert"
+                key="$cand_key"
+            fi
         elif command -v certbot >/dev/null 2>&1; then
             echo "[DECOY] Запрос SSL сертификата через certbot для ${target_domain}..." >&2
             port_opt=""

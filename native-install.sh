@@ -396,6 +396,12 @@ if [ -f "${CERTBOT_HELPER}" ]; then
     else
         echo -e "${yellow}  ⚠ Домен не найден в .env или БД, выпуск сертификата пропущен${plain}"
     fi
+
+    XUI_SELFSTEAL_DOMAIN=$(grep "^XUI_SELFSTEAL_DOMAIN=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    if [ -n "$XUI_SELFSTEAL_DOMAIN" ] && [ "$XUI_SELFSTEAL_DOMAIN" != "$XUI_DOMAIN" ]; then
+        echo -e "${yellow}  Выпуск сертификата для сайта-заглушки (${XUI_SELFSTEAL_DOMAIN})...${plain}"
+        certbot_issue_domain_cert "$XUI_SELFSTEAL_DOMAIN" "$XUI_ADMIN_EMAIL" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_SELFSTEAL_DOMAIN}${plain}"
+    fi
 else
     echo -e "${yellow}  ⚠ ${CERTBOT_HELPER} не найден, certbot пропущен${plain}"
 fi
@@ -406,6 +412,17 @@ fi
 echo ""
 systemctl restart x-ui
 sleep 2
+
+if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+    mkdir -p /etc/haproxy
+    [ -f "${XUI_CONFIG_DIR}/haproxy.cfg" ] && cp -f "${XUI_CONFIG_DIR}/haproxy.cfg" /etc/haproxy/haproxy.cfg 2>/dev/null || true
+    systemctl enable haproxy >/dev/null 2>&1 || true
+    systemctl restart haproxy >/dev/null 2>&1 || true
+fi
+
+if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
+    "${XUI_DIR}/decoy-setup.sh" apply >/dev/null 2>&1 || true
+fi
 
 if systemctl is-active --quiet x-ui && [ -f "$DB_PATH" ]; then
     PORT_VALUE=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "")
@@ -466,6 +483,11 @@ if systemctl is-active --quiet x-ui; then
         fi
         echo -e "  🔒 SSH туннель:         ssh -N -L 8080:localhost:${PORT} user@server-ip"
         echo -e "  🌐 Через туннель:       http://localhost:8080${BASE_PATH}"
+    fi
+
+    DECOY_DOM=$(grep "^XUI_SELFSTEAL_DOMAIN=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    if [ -n "$DECOY_DOM" ] && [ "$DECOY_DOM" != "localhost" ]; then
+        echo -e "  🎭 Сайт-заглушка:       https://${DECOY_DOM}/"
     fi
 
     # Учётные данные и токен
