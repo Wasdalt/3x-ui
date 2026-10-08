@@ -101,6 +101,15 @@ resolve_ssl_certs() {
         fi
     fi
 
+    if [ -z "$cert" ] && [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+        db_cert=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+        db_key=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+        if [ -n "$db_cert" ] && [ -n "$db_key" ] && [ -f "$db_cert" ] && [ -f "$db_key" ]; then
+            cert="$db_cert"
+            key="$db_key"
+        fi
+    fi
+
     if [ -z "$cert" ]; then
         # Fallback self-signed certificate
         fallback_cert="/etc/x-ui/fallback-inbound.crt"
@@ -199,7 +208,23 @@ setup_and_start_service() {
     fi
 
     # Native mode (systemd)
-    nginx_bin=$(command -v nginx || echo "/usr/sbin/nginx")
+    if ! command -v nginx >/dev/null 2>&1; then
+        echo "[DECOY] Nginx не найден, попытка автоматической установки..."
+        if command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq && apt-get install -y -qq nginx >/dev/null 2>&1 || true
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y -q nginx >/dev/null 2>&1 || true
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y -q nginx >/dev/null 2>&1 || true
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache nginx >/dev/null 2>&1 || true
+        elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm nginx >/dev/null 2>&1 || true
+        fi
+    fi
+
+    nginx_bin=$(command -v nginx || true)
     python_bin=$(command -v python3 || echo "/usr/bin/python3")
 
     if [ -n "$nginx_bin" ] && [ -x "$nginx_bin" ]; then
