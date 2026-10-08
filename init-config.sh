@@ -297,38 +297,57 @@ resolve_domain_a_records() {
     return 1
 }
 
+get_all_server_ips() {
+    # 1. All IPv4 addresses from local network interfaces (excluding loopback, docker, link-local)
+    if command -v ip >/dev/null 2>&1; then
+        ip -4 addr show 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | grep -vE '^(127\.|172\.(1[7-9]|2[0-9]|3[0-1])\.|169\.254\.)' || true
+    elif command -v hostname >/dev/null 2>&1; then
+        hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(127\.|172\.(1[7-9]|2[0-9]|3[0-1])\.|169\.254\.)' || true
+    fi
+
+    # 2. Public outbound IP (for 1:1 NAT / cloud VPC setups)
+    get_public_ip || true
+
+    # 3. Explicit server IP from .env if defined
+    [ -n "${XUI_SERVER_IP:-}" ] && echo "$XUI_SERVER_IP"
+}
+
 domain_points_to_this_server() {
     domain="$1"
 
     [ -n "$domain" ] || return 1
 
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "[DNS-CHECK] curl not found, cannot detect public IP"
-        return 1
-    fi
+    case "${XUI_SKIP_DNS_CHECK:-${XUI_DNS_CHECK_SKIP:-false}}" in
+        true|TRUE|1|yes|YES|on|ON)
+            echo "[DNS-CHECK] Skipping DNS validation via XUI_SKIP_DNS_CHECK"
+            return 0
+            ;;
+    esac
 
-    server_ip=$(get_public_ip || true)
+    all_server_ips=$(get_all_server_ips | tr ' ' '\n' | sort -u | grep -v '^$' || true)
 
-    if [ -z "$server_ip" ]; then
-        echo "[DNS-CHECK] Cannot detect server public IP"
-        return 1
+    if [ -z "$all_server_ips" ]; then
+        echo "[DNS-CHECK] Warning: Cannot detect server IPs, proceeding with cert issue attempt"
+        return 0
     fi
 
     resolved_ips=$(resolve_domain_a_records "$domain" || true)
 
     if [ -z "$resolved_ips" ]; then
         echo "[DNS-CHECK] FAIL: $domain has no A records"
-        echo "[DNS-CHECK] Server IP: $server_ip"
+        echo "[DNS-CHECK] Server IPs: $(echo "$all_server_ips" | tr '\n' ' ')"
         return 1
     fi
 
-    if echo "$resolved_ips" | grep -qx "$server_ip"; then
-        echo "[DNS-CHECK] OK: $domain -> $server_ip"
-        return 0
-    fi
+    for r_ip in $resolved_ips; do
+        if echo "$all_server_ips" | grep -qx "$r_ip"; then
+            echo "[DNS-CHECK] OK: $domain -> $r_ip matches server IP"
+            return 0
+        fi
+    done
 
     echo "[DNS-CHECK] FAIL: $domain does not point to this server"
-    echo "[DNS-CHECK] Server IP: $server_ip"
+    echo "[DNS-CHECK] Server IPs: $(echo "$all_server_ips" | tr '\n' ' ')"
     echo "[DNS-CHECK] Domain IPs: $(echo "$resolved_ips" | tr '\n' ' ')"
 
     return 1
