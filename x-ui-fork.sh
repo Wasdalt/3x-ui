@@ -155,10 +155,13 @@ Usage: x-ui-fork <command>
 Commands:
   menu      Open official author x-ui menu
   apply     Apply fork overlay only (.env, init-config, systemd hooks)
-  update    Update official 3x-ui, then reapply fork overlay
+  update    Update official 3x-ui, then reapply fork overlay (optional: [version])
   downgrade Rollback official 3x-ui to specific version (e.g. 2.4.3)
   restart   Restart x-ui systemd service
-  haproxy   Show HAProxy container status, logs and config
+  status    Show status of x-ui and HAProxy services
+  log       Show live logs (journalctl / docker)
+  backup    Create instant database backup
+  haproxy   Show HAProxy container/service status, logs and config
   url       Print current panel URL from DB
   env       Print active .env path
   help      Show this help
@@ -214,6 +217,41 @@ case "${1:-help}" in
         need_root
         systemctl restart x-ui
         echo -e "${green}x-ui restarted${plain}"
+        ;;
+    status)
+        need_root
+        if command -v systemctl >/dev/null 2>&1; then
+            echo -e "${green}=== Статус x-ui ===${plain}"
+            systemctl status x-ui --no-pager || true
+            echo ""
+            if systemctl is-active --quiet haproxy 2>/dev/null; then
+                echo -e "${green}=== Статус haproxy ===${plain}"
+                systemctl status haproxy --no-pager || true
+            fi
+        elif command -v docker >/dev/null 2>&1; then
+            docker ps -f name=3xui_app -f name=3x-haproxy
+        fi
+        ;;
+    log|logs)
+        need_root
+        if command -v journalctl >/dev/null 2>&1 && systemctl is-active --quiet x-ui 2>/dev/null; then
+            journalctl -u x-ui -f
+        elif command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' | grep -q "^3xui_app$"; then
+            docker logs -f 3xui_app
+        else
+            journalctl -u x-ui -f 2>/dev/null || docker logs -f 3xui_app 2>/dev/null || echo "Служба не запущена"
+        fi
+        ;;
+    backup)
+        need_root
+        if [ -f "$DB_PATH" ]; then
+            backup_file="/etc/x-ui/x-ui_backup_$(date +%Y%m%d_%H%M%S).db"
+            cp "$DB_PATH" "$backup_file"
+            echo -e "${green}Бэкап базы данных успешно создан: ${backup_file}${plain}"
+        else
+            echo -e "${red}База данных не найдена: ${DB_PATH}${plain}"
+            exit 1
+        fi
         ;;
     url)
         need_root
