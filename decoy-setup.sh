@@ -160,6 +160,27 @@ generate_nginx_conf() {
         mime_include="include /etc/mime.types;"
     fi
 
+    # Detect nginx version for http2 syntax compatibility
+    nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl;"
+    nginx_http2_line=""
+    bin_to_check="${nginx_bin:-$(command -v nginx || true)}"
+    if [ -n "$bin_to_check" ] && [ -x "$bin_to_check" ]; then
+        nver=$("$bin_to_check" -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        nmajor=$(echo "$nver" | cut -d. -f1)
+        nminor=$(echo "$nver" | cut -d. -f2)
+        npatch=$(echo "$nver" | cut -d. -f3)
+        if [ "${nmajor:-0}" -gt 1 ] || [ "${nmajor:-0}" -eq 1 -a "${nminor:-0}" -gt 25 ] || [ "${nmajor:-0}" -eq 1 -a "${nminor:-0}" -eq 25 -a "${npatch:-0}" -ge 1 ]; then
+            nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl;"
+            nginx_http2_line="http2 on;"
+        else
+            nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl http2;"
+            nginx_http2_line=""
+        fi
+    else
+        nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl http2;"
+        nginx_http2_line=""
+    fi
+
     mkdir -p "$(dirname "$NGINX_CONF")"
     cat > "$NGINX_CONF" <<EOF
 worker_processes 1;
@@ -179,8 +200,8 @@ http {
     server_tokens off;
 
     server {
-        listen 127.0.0.1:${SELFSTEAL_PORT} ssl;
-        http2 on;
+        ${nginx_http2_listen}
+        ${nginx_http2_line}
         server_name _;
 
         ssl_certificate ${cert};
