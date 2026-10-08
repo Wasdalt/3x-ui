@@ -27,6 +27,18 @@ DB_PATH="${XUI_CONFIG_DIR}/x-ui.db"
 DB_BACKUP=""
 INSTALL_DONE=0
 
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "${SCRIPT_DIR}/.env"
+    set +a
+elif [ -f "$XUI_ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$XUI_ENV_FILE"
+    set +a
+fi
+
 restore_db_backup_on_error() {
     if [ "$INSTALL_DONE" -ne 1 ] && [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
         mkdir -p "$XUI_CONFIG_DIR"
@@ -123,11 +135,55 @@ elif [ -f "$DOCKER_DB_PATH" ]; then
     echo -e "${green}  ✓ Бэкап БД (из Docker): ${DB_BACKUP}${plain}"
 fi
 
+CLI_VERSION="${1:-}"
+CONFIG_VERSION="${XUI_PANEL_VERSION:-}"
+TARGET_VERSION="${CLI_VERSION:-$CONFIG_VERSION}"
+DO_INSTALL_UPSTREAM=0
+
 if [ -f "${XUI_DIR}/x-ui" ]; then
-    echo -e "${green}  ✓ 3x-ui уже установлен, пропускаем${plain}"
+    CURRENT_VERSION=$("${XUI_DIR}/x-ui" -v 2>/dev/null | head -n 1 | tr -d ' \r\n' || echo "")
+    if [ -n "$CLI_VERSION" ]; then
+        echo -e "${yellow}  3x-ui уже установлен (текущая версия: ${CURRENT_VERSION:-неизвестно}). Установка запрошенной версии: ${CLI_VERSION}${plain}"
+        TARGET_VERSION="$CLI_VERSION"
+        DO_INSTALL_UPSTREAM=1
+    elif [ -t 0 ]; then
+        echo -e "${yellow}  3x-ui уже установлен (текущая версия: ${CURRENT_VERSION:-неизвестно}).${plain}"
+        read -r -p "  Переустановить / сменить версию официальной 3x-ui? [y/N]: " ask_reinstall
+        case "$ask_reinstall" in
+            y|Y|yes|YES|да|ДА)
+                read -r -p "  Какую версию установить? [Enter для latest, или укажите, напр. v2.5.0 / dev]: " input_ver
+                TARGET_VERSION="${input_ver:-latest}"
+                DO_INSTALL_UPSTREAM=1
+                ;;
+            *)
+                echo -e "${green}  ✓ Оставляем текущую установку 3x-ui (${CURRENT_VERSION:-latest})${plain}"
+                DO_INSTALL_UPSTREAM=0
+                ;;
+        esac
+    else
+        echo -e "${green}  ✓ 3x-ui уже установлен (${CURRENT_VERSION:-latest}), пропускаем${plain}"
+        DO_INSTALL_UPSTREAM=0
+    fi
 else
-    echo -e "  Запуск оригинального установщика..."
-    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+    DO_INSTALL_UPSTREAM=1
+    if [ -z "$TARGET_VERSION" ] && [ -t 0 ]; then
+        echo -e "${yellow}  Выбор версии официальной 3x-ui (MHSanaei):${plain}"
+        echo -e "  - [Enter] для последней стабильной (latest)"
+        echo -e "  - Или укажите конкретную версию (например: v2.5.0, v2.4.9, dev)"
+        read -r -p "  Версия [latest]: " input_ver
+        TARGET_VERSION="${input_ver:-latest}"
+    fi
+    TARGET_VERSION="${TARGET_VERSION:-latest}"
+fi
+
+if [ "$DO_INSTALL_UPSTREAM" -eq 1 ]; then
+    if [ -n "$TARGET_VERSION" ] && [ "$TARGET_VERSION" != "latest" ]; then
+        echo -e "  Запуск оригинального установщика (версия ${TARGET_VERSION})..."
+        bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) "$TARGET_VERSION"
+    else
+        echo -e "  Запуск оригинального установщика (latest)..."
+        bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+    fi
     echo -e "${green}  ✓ 3x-ui установлен${plain}"
 fi
 

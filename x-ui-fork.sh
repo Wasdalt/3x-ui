@@ -183,7 +183,7 @@ case "${1:-help}" in
             echo -e "${red}native-apply.sh/native-install.sh не найдены: ${PROJECT_DIR}${plain}"
             exit 1
         fi
-        exec bash "${PROJECT_DIR}/native-install.sh"
+        exec bash "${PROJECT_DIR}/native-install.sh" "${2:-}"
         ;;
     update)
         need_root
@@ -191,7 +191,7 @@ case "${1:-help}" in
             echo -e "${red}native-update.sh не найден: ${PROJECT_DIR}${plain}"
             exit 1
         fi
-        exec bash "${PROJECT_DIR}/native-update.sh"
+        exec bash "${PROJECT_DIR}/native-update.sh" "${2:-}"
         ;;
     downgrade|rollback)
         need_root

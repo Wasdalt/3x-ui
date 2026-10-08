@@ -46,8 +46,18 @@ if [ -f "$DB_PATH" ]; then
     echo -e "${green}  ✓ Бэкап БД: ${BACKUP_PATH}${plain}"
 fi
 
+UPDATE_VERSION="${1:-}"
+if [ -z "$UPDATE_VERSION" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
+    UPDATE_VERSION=$(grep -E "^XUI_PANEL_VERSION=" "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d ' "\r\n' || echo "")
+fi
+
 echo -e "${yellow}[1/2] Обновление официальной 3x-ui...${plain}"
-bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/update.sh)
+if [ -n "$UPDATE_VERSION" ] && [ "$UPDATE_VERSION" != "latest" ]; then
+    echo -e "  Установка указанной версии: ${UPDATE_VERSION}"
+    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) "$UPDATE_VERSION"
+else
+    bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/update.sh)
+fi
 
 if [ -n "$BACKUP_PATH" ] && [ -f "$BACKUP_PATH" ]; then
     mkdir -p /etc/x-ui
@@ -58,7 +68,7 @@ if [ -n "$BACKUP_PATH" ] && [ -f "$BACKUP_PATH" ]; then
 fi
 
 echo -e "${yellow}[2/2] Повторное применение fork-обвязки...${plain}"
-bash "${SCRIPT_DIR}/native-install.sh"
+bash "${SCRIPT_DIR}/native-install.sh" "$UPDATE_VERSION"
 
 echo ""
 echo -e "${green}✅ Обновление завершено: официальный 3x-ui обновлён, fork-настройки применены.${plain}"
