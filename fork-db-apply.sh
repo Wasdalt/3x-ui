@@ -26,18 +26,18 @@ if [ $((now - last)) -lt "$DEBOUNCE_SECONDS" ]; then
     exit 0
 fi
 
-INODE_FILE="/run/x-ui-fork-db-apply.inode"
+SIG_FILE="/run/x-ui-fork-db-apply.sig"
 DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 
-if [ -f "$DB_PATH" ]; then
-    current_inode=$(stat -c '%i' "$DB_PATH" 2>/dev/null || stat -f '%i' "$DB_PATH" 2>/dev/null || echo 0)
-    last_inode=$(cat "$INODE_FILE" 2>/dev/null || echo 0)
+if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+    current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+    last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 
-    # If inode is known and unchanged, this is a normal in-place SQLite write (traffic, stats, WAL), not a database restore
-    if [ "$last_inode" != "0" ] && [ "$current_inode" = "$last_inode" ]; then
-        echo "[FORK-DB-APPLY] Skip: database inode unchanged (${current_inode})"
+    # Skip if structure (inbounds and core settings) is unchanged (e.g. only traffic/stats updated)
+    if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
         exit 0
     fi
+    echo "$current_sig" > "$SIG_FILE" 2>/dev/null || true
 fi
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
