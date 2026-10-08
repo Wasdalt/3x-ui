@@ -536,12 +536,32 @@ WHERE enable = 1
     printf "%s\n" "$rows" | while IFS='|' read -r inbound_id current_server current_cert_file current_key_file; do
         [ -n "$inbound_id" ] || continue
 
-        if [ "$has_target_cert" -eq 1 ]; then
-            # Skip if already up-to-date with target domain and cert files
-            if [ "$current_cert_file" = "$target_cert_file" ] && [ "$current_key_file" = "$target_key_file" ] && [ "$current_server" = "$target_domain" ]; then
-                continue
-            fi
+        # 1. If inbound already has valid cert files on disk, NEVER touch it!
+        if [ -n "$current_cert_file" ] && [ -f "$current_cert_file" ] && [ -n "$current_key_file" ] && [ -f "$current_key_file" ]; then
+            continue
+        fi
 
+        # 2. If inbound has its own serverName and its certificate exists under /etc/letsencrypt/live/${current_server}/
+        if [ -n "$current_server" ] && [ -f "/etc/letsencrypt/live/${current_server}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${current_server}/privkey.pem" ]; then
+            own_cert="/etc/letsencrypt/live/${current_server}/fullchain.pem"
+            own_key="/etc/letsencrypt/live/${current_server}/privkey.pem"
+            esc_own_cert=$(sqlite_escape "$own_cert")
+            esc_own_key=$(sqlite_escape "$own_key")
+            sqlite_db "
+UPDATE inbounds
+SET stream_settings = json_set(
+  stream_settings,
+  '$.tlsSettings.certificates[0].certificateFile', '${esc_own_cert}',
+  '$.tlsSettings.certificates[0].keyFile', '${esc_own_key}'
+)
+WHERE id = ${inbound_id};
+"
+            echo "[INBOUND-CERT] Linked inbound id=${inbound_id} to its domain certificate: ${current_server}"
+            continue
+        fi
+
+        # 3. Only if current cert is missing from disk, fallback to target cert or self-signed
+        if [ "$has_target_cert" -eq 1 ]; then
             esc_domain=$(sqlite_escape "$target_domain")
             esc_cert_file=$(sqlite_escape "$target_cert_file")
             esc_key_file=$(sqlite_escape "$target_key_file")
@@ -556,25 +576,24 @@ SET stream_settings = json_set(
 )
 WHERE id = ${inbound_id};
 "
-            echo "[INBOUND-CERT] Updated inbound id=${inbound_id}: ${current_server:-none} (${current_cert_file}) -> ${target_domain} (${target_cert_file})"
+            echo "[INBOUND-CERT] Fallback inbound id=${inbound_id}: missing cert -> ${target_domain} (${target_cert_file})"
         else
-            # Keep existing cert if file exists on disk and is valid
-            if [ -f "$current_cert_file" ] && [ -f "$current_key_file" ]; then
-                continue
-            fi
-
             # Apply fallback self-signed cert if current file is missing
             if [ ! -f "$fallback_cert" ] || [ ! -f "$fallback_key" ]; then
                 mkdir -p "/etc/x-ui"
                 if command -v openssl >/dev/null 2>&1; then
-                    openssl req -x509 -newkey rsa:2048 -nodes                         -keyout "$fallback_key"                         -out "$fallback_cert"                         -days 3650                         -subj "/CN=${server_ip}" >/dev/null 2>&1 || true
+                    openssl req -x509 -newkey rsa:2048 -nodes \
+                        -keyout "$fallback_key" \
+                        -out "$fallback_cert" \
+                        -days 3650 \
+                        -subj "/CN=${server_ip}" >/dev/null 2>&1 || true
                 fi
             fi
 
             if [ -f "$fallback_cert" ] && [ -f "$fallback_key" ]; then
                 esc_cert_file=$(sqlite_escape "$fallback_cert")
                 esc_key_file=$(sqlite_escape "$fallback_key")
-                esc_server_name=$(sqlite_escape "${target_domain:-$server_ip}")
+                esc_server_name=$(sqlite_escape "${current_server:-${target_domain:-$server_ip}}")
 
                 sqlite_db "
 UPDATE inbounds
@@ -668,6 +687,31 @@ WHERE enable = 1
         done
     fi
 
+    # Fix Vision TCP TLS inbounds having invalid h2/h3 ALPN
+    vision_inbounds=$(sqlite_db -separator '|' "
+SELECT id, stream_settings, settings
+FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.network') = 'tcp'
+  AND json_extract(stream_settings, '$.security') = 'tls';
+" 2>/dev/null || true)
+    if [ -n "$vision_inbounds" ]; then
+        printf "%s\n" "$vision_inbounds" | while IFS='|' read -r v_id v_stream v_settings; do
+            [ -n "$v_id" ] || continue
+            if echo "$v_settings" | jq -e '.clients[]? | select(.flow == "xtls-rprx-vision")' >/dev/null 2>&1; then
+                cur_alpn=$(echo "$v_stream" | jq -r '.tlsSettings.alpn[]?' 2>/dev/null | tr '\n' ' ')
+                if echo "$cur_alpn" | grep -qE '\b(h2|h3)\b'; then
+                    echo "[AUTO-FIX] Fixing Vision inbound id=${v_id}: ALPN contains h2/h3 which breaks XTLS-Vision -> resetting to http/1.1"
+                    fixed_stream=$(echo "$v_stream" | jq -c '.tlsSettings.alpn = ["http/1.1"]' 2>/dev/null || echo "")
+                    if [ -n "$fixed_stream" ]; then
+                        esc_fixed_stream=$(sqlite_escape "$fixed_stream")
+                        sqlite_db "UPDATE inbounds SET stream_settings = '${esc_fixed_stream}' WHERE id = ${v_id};"
+                    fi
+                fi
+            fi
+        done
+    fi
 
     # 4. Generate HAProxy configuration from active inbounds
     rows=$(sqlite_db -separator '|' "
@@ -897,10 +941,6 @@ EOF_BK_CERTBOT
     echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
     now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 
-    # Update any existing 443 host entries to the current target domain
-    esc_target_domain=$(sqlite_escape "$target_domain")
-    sqlite_db "UPDATE hosts SET address = '${esc_target_domain}' WHERE port = 443 AND address != '${esc_target_domain}';" 2>/dev/null || true
-
     # Ensure each active inbound has an entry in hosts pointing to target_domain:443
     if [ -n "$rows" ]; then
         order=1
@@ -924,19 +964,42 @@ EOF_BK_CERTBOT
             esc_sni=$(sqlite_escape "$sni")
             esc_sec=$(sqlite_escape "$sec")
 
-            existing_host=$(sqlite_db "SELECT id FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
+            existing_host=$(sqlite_db -separator '|' "SELECT id, address FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
+                host_id=$(echo "$existing_host" | cut -d'|' -f1)
+                curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
+
+                case "$curr_addr" in
+                    ""|localhost|127.0.0.1|0.0.0.0)
+                        if [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
+                            host_addr="$sni"
+                        else
+                            host_addr="$target_domain"
+                        fi
+                        ;;
+                    *)
+                        host_addr="$curr_addr"
+                        ;;
+                esac
+
+                esc_host_addr=$(sqlite_escape "$host_addr")
                 sqlite_db "
 UPDATE hosts
-SET address = '${esc_target_domain}',
+SET address = '${esc_host_addr}',
     port = 443,
     sni = '${esc_sni}',
     security = '${esc_sec}',
     remark = '${esc_remark}',
     updated_at = ${now_ms}
-WHERE id = ${existing_host};
+WHERE id = ${host_id};
 " 2>/dev/null || true
             else
+                if [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
+                    host_addr="$sni"
+                else
+                    host_addr="$target_domain"
+                fi
+                esc_host_addr=$(sqlite_escape "$host_addr")
                 group_id=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || echo "grp${id}${now_ms}")
                 sqlite_db "
 INSERT INTO hosts (
@@ -950,7 +1013,7 @@ INSERT INTO hosts (
     shuffle_host, node_guids, created_at, updated_at
 ) VALUES (
     '${group_id}', ${id}, ${order}, '${esc_remark}', '',
-    0, 0, '', '${esc_target_domain}', 443,
+    0, 0, '', '${esc_host_addr}', 443,
     '${esc_sec}', '${esc_sni}', '', '', '[]',
     '', 0, 0,
     '[]', '', 0,
