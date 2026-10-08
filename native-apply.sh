@@ -155,6 +155,49 @@ fi
 export XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
 "${XUI_DIR}/init-config.sh"
 
+case "${XUI_HAPROXY_ENABLE:-true}" in
+    true|TRUE|1|yes|YES|on|ON)
+        # 1. Native HAProxy service (systemd)
+        if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+            echo -e "${yellow}  Настройка нативного сервиса haproxy.service...${plain}"
+            mkdir -p /etc/haproxy
+            if [ -f "${XUI_CONFIG_DIR}/haproxy.cfg" ]; then
+                cp -f "${XUI_CONFIG_DIR}/haproxy.cfg" /etc/haproxy/haproxy.cfg
+            fi
+            systemctl enable haproxy >/dev/null 2>&1 || true
+            systemctl restart haproxy >/dev/null 2>&1 || true
+            echo -e "${green}  ✓ haproxy.service включен и запущен (native)${plain}"
+        # 2. Docker container fallback
+        elif command -v docker >/dev/null 2>&1; then
+            if [ ! -f "${XUI_CONFIG_DIR}/haproxy.cfg" ]; then
+                touch "${XUI_CONFIG_DIR}/haproxy.cfg"
+                chmod 644 "${XUI_CONFIG_DIR}/haproxy.cfg"
+            fi
+
+            if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+                if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+                    docker start 3x-haproxy >/dev/null 2>&1 || true
+                else
+                    docker run -d --name 3x-haproxy \
+                        --restart always \
+                        --net=host \
+                        --user 0:0 \
+                        -v "${XUI_CONFIG_DIR}:/etc/x-ui:ro" \
+                        haproxy:alpine haproxy -W -db -f /etc/x-ui/haproxy.cfg >/dev/null 2>&1 || echo -e "${yellow}  ⚠ Не удалось запустить 3x-haproxy контейнер${plain}"
+                    echo -e "${green}  ✓ 3x-haproxy container created and started${plain}"
+                fi
+            else
+                echo -e "${green}  ✓ 3x-haproxy container is running${plain}"
+            fi
+        else
+            echo -e "${yellow}  ⚠ Ни haproxy, ни Docker не найдены на сервере${plain}"
+        fi
+        ;;
+    *)
+        echo -e "${yellow}  HAProxy отключен (XUI_HAPROXY_ENABLE=${XUI_HAPROXY_ENABLE})${plain}"
+        ;;
+esac
+
 systemctl restart x-ui
 
 echo -e "${green}  ✓ fork overlay applied${plain}"

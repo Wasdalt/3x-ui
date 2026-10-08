@@ -15,6 +15,17 @@ if [ -r "$CERTBOT_HELPER" ]; then
     . "$CERTBOT_HELPER"
 fi
 
+# Load environment configuration if available
+if [ -f "/etc/x-ui/.env" ] && [ -r "/etc/x-ui/.env" ]; then
+    set -a
+    . "/etc/x-ui/.env"
+    set +a
+elif [ -f "${SCRIPT_DIR}/.env" ] && [ -r "${SCRIPT_DIR}/.env" ]; then
+    set -a
+    . "${SCRIPT_DIR}/.env"
+    set +a
+fi
+
 # Wait for database creation / Ждём создания БД
 for i in $(seq 1 30); do
     if [ -f "$DB_PATH" ]; then
@@ -567,6 +578,290 @@ WHERE id = ${inbound_id};
     done
 }
 
+sync_haproxy_and_hosts() {
+    target_domain=$1
+    haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
+
+    case "${XUI_HAPROXY_ENABLE:-true}" in
+        true|TRUE|1|yes|YES|on|ON) ;;
+        *)
+            echo "[HAPROXY] Disabled via XUI_HAPROXY_ENABLE"
+            return 0
+            ;;
+    esac
+
+    command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || {
+        echo "[HAPROXY] sqlite3 or jq not found, skipping HAProxy synchronization"
+        return 0
+    }
+
+    # 1. Resolve target domain for clients / subscriptions
+    if [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+        target_domain="$XUI_HAPROXY_DOMAIN"
+    fi
+    if [ -z "$target_domain" ] || [ "$target_domain" = "127.0.0.1" ]; then
+        db_sub=$(sqlite_db "SELECT value FROM settings WHERE key='subDomain';" 2>/dev/null || echo "")
+        db_web=$(sqlite_db "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+        target_domain="${db_sub:-${db_web}}"
+    fi
+    if [ -z "$target_domain" ] || [ "$target_domain" = "127.0.0.1" ]; then
+        discovered_ip=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n 1)
+        target_domain="${discovered_ip:-127.0.0.1}"
+    fi
+
+    # 2. Prevent port 11111 collision with Happ proxy client in xrayTemplateConfig
+    sqlite_db "
+UPDATE settings
+SET value = json_set(value, '$.metrics.listen', '127.0.0.1:61111')
+WHERE key = 'xrayTemplateConfig'
+  AND json_valid(value)
+  AND json_extract(value, '$.metrics.listen') = '127.0.0.1:11111';
+" >/dev/null 2>&1 || true
+
+    # 3. Shift any TCP inbound from port 443 to internal port 10443 so HAProxy can bind 443
+    inbound_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol != 'hysteria' LIMIT 1;" 2>/dev/null || echo "")
+    if [ -n "$inbound_443" ]; then
+        echo "[HAPROXY] Inbound id=${inbound_443} is listening on 443, shifting to internal port 10443 for HAProxy"
+        sqlite_db "UPDATE inbounds SET port = 10443 WHERE id = ${inbound_443};"
+    fi
+
+    # 4. Generate HAProxy configuration from active inbounds
+    rows=$(sqlite_db -separator '|' "
+SELECT id, port, remark, protocol, stream_settings
+FROM inbounds
+WHERE enable = 1
+  AND protocol NOT IN ('mtproto', 'mixed', 'hysteria')
+  AND json_valid(stream_settings)
+ORDER BY id ASC;
+" 2>/dev/null || true)
+
+    if [ -n "$rows" ]; then
+        tmp_cfg=$(mktemp)
+        tmp_parts=$(mktemp)
+
+        printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
+            [ -n "$id" ] || continue
+            sec=$(echo "$stream" | jq -r '.security // ""' 2>/dev/null || echo "")
+            snis=""
+
+            if [ "$sec" = "reality" ]; then
+                snis=$(echo "$stream" | jq -r '.realitySettings.serverNames[]?' 2>/dev/null | tr '\n' ' ')
+            elif [ "$sec" = "tls" ]; then
+                snis=$(echo "$stream" | jq -r '.tlsSettings.serverName // ""' 2>/dev/null)
+            fi
+
+            clean_snis=""
+            for s in $snis; do
+                case "$s" in
+                    ""|localhost|127.0.0.1|*:[0-9]*) continue ;;
+                    [0-9]*.[0-9]*.[0-9]*.[0-9]*) continue ;;
+                    *) clean_snis="$clean_snis $s" ;;
+                esac
+            done
+
+            # If TLS inbound has no domain SNI, fallback to target_domain
+            if [ -z "$clean_snis" ] && [ "$sec" = "tls" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ]; then
+                clean_snis="$target_domain"
+            fi
+
+            if [ -n "$clean_snis" ]; then
+                cond=""
+                for s in $clean_snis; do
+                    if [ -z "$cond" ]; then
+                        cond="{ req_ssl_sni -i $s }"
+                    else
+                        cond="$cond || { req_ssl_sni -i $s }"
+                    fi
+                done
+                bk_name="bk_in_${id}"
+                echo "RULE:    use_backend ${bk_name} if ${cond}" >> "$tmp_parts"
+                echo "BACKEND:${bk_name}|${port}" >> "$tmp_parts"
+            fi
+        done
+
+        cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
+global
+    log stdout format raw local0
+    maxconn 4096
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+
+frontend fe_tls_in
+    bind :443
+    mode tcp
+    option tcplog
+    tcp-request inspect-delay 5s
+    tcp-request content set-var(sess.sni) req_ssl_sni
+    tcp-request content accept if { req_ssl_hello_type 1 }
+    log-format "%ci:%cp [%t] %ft %b/%s %Tw/%Tc/%Tt %B %ts SNI:%[var(sess.sni)]"
+
+    # SNI Routing for 3x-ui inbounds
+EOF_HAPROXY_HEAD
+
+        grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
+        def_bk=$(grep "^BACKEND:" "$tmp_parts" 2>/dev/null | head -n 1 | cut -d: -f2 | cut -d'|' -f1 || echo "")
+
+        cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
+
+    # Default fallback: first available Reality/TLS inbound
+    default_backend ${def_bk:-bk_default}
+EOF_HAPROXY_DEF
+
+        grep "^BACKEND:" "$tmp_parts" 2>/dev/null | while IFS='|' read -r raw_bk port; do
+            bk=$(echo "$raw_bk" | cut -d: -f2)
+            cat << EOF_BK >> "$tmp_cfg"
+
+backend ${bk}
+    mode tcp
+    server srv1 127.0.0.1:${port}
+EOF_BK
+        done
+
+        # Pre-flight syntax validation before applying config
+        chmod 644 "$tmp_cfg"
+        cfg_valid=1
+        val_output=""
+        if command -v haproxy >/dev/null 2>&1; then
+            if ! val_output=$(haproxy -c -f "$tmp_cfg" 2>&1); then
+                cfg_valid=0
+            fi
+        elif command -v docker >/dev/null 2>&1; then
+            if ! val_output=$(docker run --rm --user 0:0 -v "${tmp_cfg}:/tmp/test.cfg:ro" haproxy:alpine haproxy -c -f /tmp/test.cfg 2>&1); then
+                cfg_valid=0
+            fi
+        fi
+
+        if [ "$cfg_valid" -eq 0 ]; then
+            echo "[HAPROXY-ERROR] Generated config failed syntax validation! Preserving previous configuration."
+            [ -n "$val_output" ] && echo "[HAPROXY-ERROR] Details: $val_output"
+        else
+            mkdir -p "$(dirname "$haproxy_cfg_file")"
+            if [ ! -f "$haproxy_cfg_file" ] || ! cmp -s "$tmp_cfg" "$haproxy_cfg_file"; then
+                cat "$tmp_cfg" > "$haproxy_cfg_file"
+                chmod 644 "$haproxy_cfg_file"
+                echo "[HAPROXY] Generated and updated ${haproxy_cfg_file}"
+
+                # Also sync to /etc/haproxy/haproxy.cfg if native haproxy directory exists
+                if [ -d "/etc/haproxy" ]; then
+                    cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
+                fi
+
+                # Reload HAProxy (supports native systemd service or Docker container)
+                if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet haproxy 2>/dev/null; then
+                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
+                elif command -v docker >/dev/null 2>&1; then
+                    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+                        docker kill -s USR2 3x-haproxy >/dev/null 2>&1 || docker restart 3x-haproxy >/dev/null 2>&1 || true
+                        echo "[HAPROXY] Reloaded 3x-haproxy docker container (seamless USR2)"
+                    fi
+                fi
+            else
+                echo "[HAPROXY] Configuration ${haproxy_cfg_file} is up-to-date"
+            fi
+        fi
+
+        rm -f "$tmp_cfg" "$tmp_parts"
+    fi
+
+    # 5. Synchronize hosts table (nodes for subscriptions)
+    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
+    now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
+
+    # Update any existing 443 host entries to the current target domain
+    esc_target_domain=$(sqlite_escape "$target_domain")
+    sqlite_db "UPDATE hosts SET address = '${esc_target_domain}' WHERE port = 443 AND address != '${esc_target_domain}';" 2>/dev/null || true
+
+    # Ensure each active inbound has an entry in hosts pointing to target_domain:443
+    if [ -n "$rows" ]; then
+        order=1
+        printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
+            [ -n "$id" ] || continue
+            sec=$(echo "$stream" | jq -r '.security // "same"' 2>/dev/null || echo "same")
+            sni=""
+
+            if [ "$sec" = "reality" ]; then
+                sni=$(echo "$stream" | jq -r '.realitySettings.serverNames[0] // ""' 2>/dev/null || echo "")
+            elif [ "$sec" = "tls" ]; then
+                sni=$(echo "$stream" | jq -r '.tlsSettings.serverName // ""' 2>/dev/null || echo "")
+            fi
+            case "$sni" in
+                ""|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                    sni="$target_domain"
+                    ;;
+            esac
+
+            esc_remark=$(sqlite_escape "$remark")
+            esc_sni=$(sqlite_escape "$sni")
+            esc_sec=$(sqlite_escape "$sec")
+
+            existing_host=$(sqlite_db "SELECT id FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
+            if [ -n "$existing_host" ]; then
+                sqlite_db "
+UPDATE hosts
+SET address = '${esc_target_domain}',
+    port = 443,
+    sni = '${esc_sni}',
+    security = '${esc_sec}',
+    remark = '${esc_remark}',
+    updated_at = ${now_ms}
+WHERE id = ${existing_host};
+" 2>/dev/null || true
+            else
+                group_id=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || echo "grp${id}${now_ms}")
+                sqlite_db "
+INSERT INTO hosts (
+    group_id, inbound_id, sort_order, remark, server_description,
+    is_disabled, is_hidden, tags, address, port,
+    security, sni, host_header, path, alpn,
+    fingerprint, override_sni_from_address, keep_sni_blank,
+    pinned_peer_cert_sha256, verify_peer_cert_by_name, allow_insecure,
+    ech_config_list, mux_params, sockopt_params, final_mask,
+    vless_route, exclude_from_sub_types, mihomo_ip_version, mihomo_x25519,
+    shuffle_host, node_guids, created_at, updated_at
+) VALUES (
+    '${group_id}', ${id}, ${order}, '${esc_remark}', '',
+    0, 0, '', '${esc_target_domain}', 443,
+    '${esc_sec}', '${esc_sni}', '', '', '[]',
+    '', 0, 0,
+    '[]', '', 0,
+    '', '', '', '',
+    '', '', '', 0,
+    0, '', ${now_ms}, ${now_ms}
+);
+" 2>/dev/null || true
+            fi
+            order=$((order + 1))
+        done
+        echo "[HAPROXY-HOSTS] Hosts table synchronized for all active inbounds"
+    fi
+
+    # 6. Clean legacy externalProxy from inbounds.stream_settings
+    rows_ext=$(sqlite_db -separator '|' "
+SELECT id, stream_settings
+FROM inbounds
+WHERE stream_settings LIKE '%externalProxy%';
+" 2>/dev/null || true)
+
+    if [ -n "$rows_ext" ]; then
+        printf "%s\n" "$rows_ext" | while IFS='|' read -r ext_id ext_stream; do
+            [ -n "$ext_id" ] || continue
+            new_stream=$(echo "$ext_stream" | jq 'del(.externalProxy)' 2>/dev/null || echo "")
+            if [ -n "$new_stream" ] && [ "$new_stream" != "$ext_stream" ]; then
+                esc_new_stream=$(sqlite_escape "$new_stream")
+                sqlite_db "UPDATE inbounds SET stream_settings = '${esc_new_stream}' WHERE id = ${ext_id};" 2>/dev/null || true
+                echo "[HAPROXY] Cleaned legacy externalProxy from inbound id=${ext_id}"
+            fi
+        done
+    fi
+}
+
 # ============================================================================
 # Domain Detection
 # ============================================================================
@@ -677,14 +972,23 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         echo "[DOMAIN] Final domain saved to DB: $FINAL_DOMAIN"
         echo "[DOMAIN] Certificate paths saved to DB"
     else
-        echo "[DOMAIN] No usable domain found. SSL not configured."
+        echo "[DOMAIN] Certbot validation skipped or not matching. Preserving domain configuration."
 
-        XUI_DOMAIN=""
+        XUI_DOMAIN="${ENV_DOMAIN:-$DB_DOMAIN}"
         CERT_FILE=""
         KEY_FILE=""
-        SUB_DOMAIN=""
-        SUB_CERT_FILE=""
-        SUB_KEY_FILE=""
+        if [ -n "$XUI_DOMAIN" ]; then
+            cert_cand="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
+            key_cand="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
+            if [ -f "$cert_cand" ] && [ -f "$key_cand" ]; then
+                CERT_FILE="$cert_cand"
+                KEY_FILE="$key_cand"
+                echo "[DOMAIN] Found valid local certificates on disk: $CERT_FILE"
+            fi
+        fi
+        SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
+        SUB_CERT_FILE="$CERT_FILE"
+        SUB_KEY_FILE="$KEY_FILE"
     fi
 else
     echo "[AUTO-CERT] certbot is not installed, skipping certificate issue"
@@ -776,20 +1080,25 @@ fi
 
 set_always "webPort" "$XUI_PORT"
 
-if [ -n "$XUI_DOMAIN" ]; then
-    set_always "webDomain" "$XUI_DOMAIN"
+effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
+if [ -n "$effective_domain" ]; then
+    set_always "webDomain" "$effective_domain"
 else
     set_empty "webDomain"
 fi
 
-if [ -n "$CERT_FILE" ]; then
+if [ -n "$CERT_FILE" ] && [ -f "$CERT_FILE" ]; then
     set_always "webCertFile" "$CERT_FILE"
+elif [ -n "$(get_setting_value webCertFile)" ] && [ -f "$(get_setting_value webCertFile)" ]; then
+    :
 else
     set_empty "webCertFile"
 fi
 
-if [ -n "$KEY_FILE" ]; then
+if [ -n "$KEY_FILE" ] && [ -f "$KEY_FILE" ]; then
     set_always "webKeyFile" "$KEY_FILE"
+elif [ -n "$(get_setting_value webKeyFile)" ] && [ -f "$(get_setting_value webKeyFile)" ]; then
+    :
 else
     set_empty "webKeyFile"
 fi
@@ -805,23 +1114,28 @@ if [ -n "$SUB_DOMAIN" ]; then
     set_always "subDomain" "$SUB_DOMAIN"
 elif [ -n "$XUI_SUB_DOMAIN" ]; then
     set_always "subDomain" "$XUI_SUB_DOMAIN"
-elif [ -n "$XUI_DOMAIN" ]; then
-    set_always "subDomain" "$XUI_DOMAIN"
+elif [ -n "$effective_domain" ]; then
+    set_always "subDomain" "$effective_domain"
 else
     set_empty "subDomain"
 fi
 
-if [ -n "$SUB_CERT_FILE" ]; then
+if [ -n "$SUB_CERT_FILE" ] && [ -f "$SUB_CERT_FILE" ]; then
     set_always "subCertFile" "$SUB_CERT_FILE"
+elif [ -n "$(get_setting_value subCertFile)" ] && [ -f "$(get_setting_value subCertFile)" ]; then
+    :
 else
     set_empty "subCertFile"
 fi
 
-if [ -n "$SUB_KEY_FILE" ]; then
+if [ -n "$SUB_KEY_FILE" ] && [ -f "$SUB_KEY_FILE" ]; then
     set_always "subKeyFile" "$SUB_KEY_FILE"
+elif [ -n "$(get_setting_value subKeyFile)" ] && [ -f "$(get_setting_value subKeyFile)" ]; then
+    :
 else
     set_empty "subKeyFile"
 fi
+
 
 # Resolve any collision between subPort and existing inbound ports
 sub_port_val=$(get_setting_value "subPort")
@@ -840,7 +1154,11 @@ fi
 
 # Inbound TLS certificates are stored separately in inbounds.stream_settings.
 # Keep them in sync only when the saved certificate path is broken.
-sync_inbound_tls_certs "$XUI_DOMAIN" "$CERT_FILE" "$KEY_FILE"
+effective_domain="${FINAL_DOMAIN:-${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}}"
+sync_inbound_tls_certs "$effective_domain" "$CERT_FILE" "$KEY_FILE"
+
+# Sync HAProxy SNI routing on port 443 and hosts table for subscriptions
+sync_haproxy_and_hosts "$effective_domain"
 
 # Session / Сессия
 set_always "sessionMaxAge" "$XUI_SESSION_TIMEOUT"

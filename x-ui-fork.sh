@@ -158,6 +158,7 @@ Commands:
   update    Update official 3x-ui, then reapply fork overlay
   downgrade Rollback official 3x-ui to specific version (e.g. 2.4.3)
   restart   Restart x-ui systemd service
+  haproxy   Show HAProxy container status, logs and config
   url       Print current panel URL from DB
   env       Print active .env path
   help      Show this help
@@ -217,6 +218,30 @@ case "${1:-help}" in
     url)
         need_root
         panel_url
+        ;;
+    haproxy)
+        need_root
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet haproxy 2>/dev/null; then
+            echo -e "${green}=== Статус сервиса haproxy.service (systemd) ===${plain}"
+            systemctl status haproxy --no-pager
+            echo ""
+            echo -e "${green}=== Последние логи haproxy (journalctl) ===${plain}"
+            journalctl -u haproxy -n 25 --no-pager
+            echo ""
+            echo -e "${green}=== Конфигурация /etc/x-ui/haproxy.cfg ===${plain}"
+            cat /etc/x-ui/haproxy.cfg 2>/dev/null || cat /etc/haproxy/haproxy.cfg 2>/dev/null || echo "Конфиг не найден"
+        elif command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' | grep -q "^3x-haproxy$"; then
+            echo -e "${green}=== Статус контейнера 3x-haproxy (Docker) ===${plain}"
+            docker ps -f name=3x-haproxy
+            echo ""
+            echo -e "${green}=== Последние логи HAProxy ===${plain}"
+            docker logs --tail 25 3x-haproxy
+            echo ""
+            echo -e "${green}=== Конфигурация /etc/x-ui/haproxy.cfg ===${plain}"
+            cat /etc/x-ui/haproxy.cfg 2>/dev/null || echo "Конфиг не найден"
+        else
+            echo -e "${yellow}HAProxy не запущен (ни как сервис systemd, ни в Docker)${plain}"
+        fi
         ;;
     env)
         echo "/etc/x-ui/.env -> ${PROJECT_DIR}/.env"
