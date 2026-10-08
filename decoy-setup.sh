@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 XUI_DIR="${XUI_DIR:-/usr/local/x-ui}"
 CONFIG_DIR="${XUI_CONFIG_DIR:-/etc/x-ui}"
 ENV_FILE="${XUI_ENV_FILE:-${CONFIG_DIR}/.env}"
+[ -f "$ENV_FILE" ] || ENV_FILE="${SCRIPT_DIR}/.env"
 
 if [ -f "$ENV_FILE" ]; then
     set -a
@@ -34,7 +35,7 @@ list_templates() {
         if [ -d "$dir" ] && [ -f "$dir/index.html" ]; then
             name=$(basename "$dir")
             if [ "$name" = "$SELFSTEAL_TEMPLATE" ]; then
-                echo "  * $name (активный)"
+                echo "  * $name (активный в .env)"
             else
                 echo "  - $name"
             fi
@@ -59,20 +60,33 @@ switch_template() {
     mkdir -p "$PUBLIC_DIR"
     find "$PUBLIC_DIR" -mindepth 1 -not -name '.gitkeep' -delete 2>/dev/null || true
     cp -rf "${TEMPLATES_DIR}/${target}/"* "$PUBLIC_DIR/"
+    echo "$target" > "${PUBLIC_DIR}/.current_template"
     echo "✓ Шаблон '${target}' успешно установлен в ${PUBLIC_DIR}"
 
     # Also sync to /usr/local/x-ui/decoy if running native
-    if [ "$DECOY_ROOT" != "${XUI_DIR}/decoy" ] && [ -d "${XUI_DIR}" ]; then
-        mkdir -p "${XUI_DIR}/decoy/public"
+    if [ "$DECOY_ROOT" != "${XUI_DIR}/decoy" ] && [ -d "${XUI_DIR}" ] && [ -w "${XUI_DIR}" ]; then
+        mkdir -p "${XUI_DIR}/decoy/public" 2>/dev/null || true
         find "${XUI_DIR}/decoy/public" -mindepth 1 -delete 2>/dev/null || true
         cp -rf "${PUBLIC_DIR}/"* "${XUI_DIR}/decoy/public/" 2>/dev/null || true
+        echo "$target" > "${XUI_DIR}/decoy/public/.current_template" 2>/dev/null || true
     fi
 
     # Update .env if accessible
-    if [ -f "$ENV_FILE" ]; then
-        if grep -q "^XUI_SELFSTEAL_TEMPLATE=" "$ENV_FILE"; then
-            sed -i "s/^XUI_SELFSTEAL_TEMPLATE=.*/XUI_SELFSTEAL_TEMPLATE=${target}/" "$ENV_FILE"
+    real_env="$(readlink -f "$ENV_FILE" 2>/dev/null || echo "$ENV_FILE")"
+    if [ -f "$real_env" ] && [ -w "$real_env" ]; then
+        if grep -q "^XUI_SELFSTEAL_TEMPLATE=" "$real_env"; then
+            sed -i "s/^XUI_SELFSTEAL_TEMPLATE=.*/XUI_SELFSTEAL_TEMPLATE=${target}/" "$real_env"
+        else
+            echo "XUI_SELFSTEAL_TEMPLATE=${target}" >> "$real_env"
         fi
+        echo "✓ Переменная XUI_SELFSTEAL_TEMPLATE=${target} записана в ${real_env}"
+    elif [ -f "${SCRIPT_DIR}/.env" ] && [ -w "${SCRIPT_DIR}/.env" ]; then
+        if grep -q "^XUI_SELFSTEAL_TEMPLATE=" "${SCRIPT_DIR}/.env"; then
+            sed -i "s/^XUI_SELFSTEAL_TEMPLATE=.*/XUI_SELFSTEAL_TEMPLATE=${target}/" "${SCRIPT_DIR}/.env"
+        else
+            echo "XUI_SELFSTEAL_TEMPLATE=${target}" >> "${SCRIPT_DIR}/.env"
+        fi
+        echo "✓ Переменная XUI_SELFSTEAL_TEMPLATE=${target} записана в ${SCRIPT_DIR}/.env"
     fi
 }
 
@@ -316,8 +330,10 @@ setup_and_start_service() {
         TEMPLATES_DIR="${XUI_DIR}/decoy/templates"
     fi
 
-    # 1. Ensure public dir has an index.html
-    if [ ! -f "${PUBLIC_DIR}/index.html" ]; then
+    # 1. Ensure public dir has the active template from .env
+    current_installed=""
+    [ -f "${PUBLIC_DIR}/.current_template" ] && current_installed="$(cat "${PUBLIC_DIR}/.current_template" 2>/dev/null)"
+    if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
         switch_template "$SELFSTEAL_TEMPLATE"
     fi
     chmod -R 755 "$PUBLIC_DIR" 2>/dev/null || true
@@ -474,7 +490,20 @@ case "${1:-status}" in
         ;;
     preview)
         port="${2:-8080}"
-        python3 "${DECOY_ROOT}/preview_server.py" "$port"
+        current_installed=""
+        [ -f "${PUBLIC_DIR}/.current_template" ] && current_installed="$(cat "${PUBLIC_DIR}/.current_template" 2>/dev/null)"
+        if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
+            switch_template "$SELFSTEAL_TEMPLATE"
+        fi
+        echo "=========================================================="
+        echo "Локальный предпросмотр активной заглушки из .env: ${SELFSTEAL_TEMPLATE}"
+        echo "URL: http://localhost:${port}"
+        echo "Каталог: ${PUBLIC_DIR}"
+        echo "=========================================================="
+        echo "Смена шаблона: измените XUI_SELFSTEAL_TEMPLATE в .env"
+        echo "или выполните: $0 template <имя>"
+        echo "=========================================================="
+        exec python3 -m http.server "$port" --directory "$PUBLIC_DIR"
         ;;
     status)
         check_status

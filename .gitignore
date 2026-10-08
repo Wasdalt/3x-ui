@@ -51,3 +51,4 @@ torrent-data/
 db/
 xray-torrent-blocker/
 xray-iplimit-blocker/
+decoy/public/.current_template
