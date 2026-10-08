@@ -165,6 +165,7 @@ Commands:
   status    Show status of x-ui and HAProxy services
   log       Show live logs (journalctl / docker)
   backup    Create instant database backup
+  restore   Restore database from backup file and apply configuration (optional: [file])
   haproxy   Show HAProxy container/service status, logs and config
   selfsteal Manage SelfSteal decoy website (status, templates, template <name>)
   url       Print current panel URL from DB
@@ -262,6 +263,51 @@ case "${1:-help}" in
             echo -e "${red}База данных не найдена: ${DB_PATH}${plain}"
             exit 1
         fi
+        ;;
+    restore)
+        need_root
+        backup_src="${2:-}"
+        if [ -z "$backup_src" ]; then
+            backup_src=$(ls -t /etc/x-ui/x-ui_backup_*.db /tmp/x-ui.db.backup.* 2>/dev/null | head -n 1 || true)
+            if [ -z "$backup_src" ]; then
+                echo -e "${red}Файл бэкапа не указан и не найден автоматически${plain}"
+                echo -e "Использование: x-ui-fork restore <путь_к_файлу.db>"
+                exit 1
+            fi
+            echo -e "Автоматически выбран последний бэкап: ${yellow}${backup_src}${plain}"
+        fi
+        if [ ! -f "$backup_src" ]; then
+            echo -e "${red}Файл бэкапа не найден: ${backup_src}${plain}"
+            exit 1
+        fi
+        if command -v sqlite3 >/dev/null 2>&1; then
+            if ! sqlite3 "$backup_src" "PRAGMA integrity_check;" 2>/dev/null | grep -q "ok"; then
+                echo -e "${red}Файл не является корректной базой данных SQLite: ${backup_src}${plain}"
+                exit 1
+            fi
+        fi
+
+        echo -e "${yellow}Восстановление базы данных из ${backup_src}...${plain}"
+        systemctl stop x-ui 2>/dev/null || true
+        cp -f "$backup_src" "$DB_PATH"
+        chmod 644 "$DB_PATH"
+        echo -e "${green}✓ База данных скопирована в ${DB_PATH}${plain}"
+
+        init_script=""
+        if [ -x "${PROJECT_DIR}/init-config.sh" ]; then
+            init_script="${PROJECT_DIR}/init-config.sh"
+        elif [ -x "/usr/local/x-ui/init-config.sh" ]; then
+            init_script="/usr/local/x-ui/init-config.sh"
+        fi
+        if [ -n "$init_script" ]; then
+            echo -e "${yellow}Применение конфигурации и выпуск сертификатов...${plain}"
+            "$init_script" || true
+        fi
+
+        systemctl restart x-ui 2>/dev/null || true
+        echo -e "${green}✓ x-ui перезапущен с восстановленной базой${plain}"
+        echo ""
+        panel_url
         ;;
     url)
         need_root

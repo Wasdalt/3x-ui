@@ -1117,30 +1117,39 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         SUB_KEY_FILE="$KEY_FILE"
     fi
 
-    # Auto-issue SSL certificates for all SelfSteal / Reality inbounds targeting local decoy (10444)
+    # Auto-issue SSL certificates for all candidate domains from DB and .env
     if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
-        decoy_domains=$(sqlite_db "
+        db_reality_doms=$(sqlite_db "
 SELECT json_extract(stream_settings, '$.realitySettings.serverNames[0]')
 FROM inbounds
 WHERE enable = 1
   AND json_valid(stream_settings)
-  AND json_extract(stream_settings, '$.security') = 'reality'
-  AND (json_extract(stream_settings, '$.realitySettings.target') LIKE '%10444%' OR json_extract(stream_settings, '$.realitySettings.target') LIKE '%127.0.0.1%');
+  AND json_extract(stream_settings, '$.security') = 'reality';
 " 2>/dev/null || true)
 
-        for extra_d in "${XUI_SELFSTEAL_DOMAIN:-}" "${XUI_HAPROXY_DOMAIN:-}"; do
-            [ -n "$extra_d" ] || continue
-            case "$extra_d" in
-                ""|null|localhost|127.0.0.1) continue ;;
-            esac
-            decoy_domains="${decoy_domains} ${extra_d}"
-        done
+        db_tls_doms=$(sqlite_db "
+SELECT json_extract(stream_settings, '$.tlsSettings.serverName')
+FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.security') = 'tls';
+" 2>/dev/null || true)
+
+        db_settings_doms=$(sqlite_db "
+SELECT value FROM settings WHERE key IN ('webDomain', 'subDomain') AND value != '';
+" 2>/dev/null || true)
+
+        db_hosts_doms=$(sqlite_db "
+SELECT address FROM hosts WHERE address != '' AND address NOT LIKE '127.%' AND address NOT LIKE '0.0.%';
+" 2>/dev/null || true)
+
+        all_candidate_domains=$(echo "$db_reality_doms $db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-}" | tr ' ' '\n' | sort -u)
 
         decoy_updated=0
-        for d in $decoy_domains; do
+        for d in $all_candidate_domains; do
             [ -n "$d" ] || continue
             case "$d" in
-                ""|null|localhost|127.0.0.1) continue ;;
+                ""|null|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*) continue ;;
             esac
             if command -v is_domain_name >/dev/null 2>&1 && is_domain_name "$d"; then
                 # Check if cert already exists and valid
@@ -1164,9 +1173,19 @@ WHERE enable = 1
 
                 # Check if DNS resolves to self before calling certbot
                 if command -v domain_points_to_this_server >/dev/null 2>&1 && domain_points_to_this_server "$d"; then
-                    echo "[AUTO-SSL] Automatically requesting SSL certificate for SelfSteal domain: $d"
+                    echo "[AUTO-SSL] Automatically requesting SSL certificate for domain: $d"
                     if certbot_issue_domain_cert "$d" "$CERTBOT_EMAIL"; then
                         decoy_updated=1
+                        if [ "$d" = "$XUI_DOMAIN" ] || [ "$d" = "$(get_setting_value webDomain)" ]; then
+                            set_always "webCertFile" "/etc/letsencrypt/live/${d}/fullchain.pem"
+                            set_always "webKeyFile" "/etc/letsencrypt/live/${d}/privkey.pem"
+                            CERT_FILE="/etc/letsencrypt/live/${d}/fullchain.pem"
+                            KEY_FILE="/etc/letsencrypt/live/${d}/privkey.pem"
+                        fi
+                        if [ "$d" = "${XUI_SUB_DOMAIN:-}" ] || [ "$d" = "$(get_setting_value subDomain)" ]; then
+                            set_always "subCertFile" "/etc/letsencrypt/live/${d}/fullchain.pem"
+                            set_always "subKeyFile" "/etc/letsencrypt/live/${d}/privkey.pem"
+                        fi
                     fi
                 else
                     echo "[AUTO-SSL] Domain $d does not point to this server yet, skipping certbot"
