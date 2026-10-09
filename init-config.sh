@@ -920,6 +920,7 @@ EOF_BK_CERTBOT
             [ -n "$val_output" ] && echo "[HAPROXY-ERROR] Details: $val_output"
         else
             mkdir -p "$(dirname "$haproxy_cfg_file")"
+            haproxy_changed=0
             if [ ! -f "$haproxy_cfg_file" ] || ! cmp -s "$tmp_cfg" "$haproxy_cfg_file"; then
                 cat "$tmp_cfg" > "$haproxy_cfg_file"
                 chmod 644 "$haproxy_cfg_file"
@@ -929,6 +930,7 @@ EOF_BK_CERTBOT
                 mkdir -p /etc/haproxy /run/haproxy 2>/dev/null || true
                 cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
                 chmod 644 /etc/haproxy/haproxy.cfg 2>/dev/null || true
+                haproxy_changed=1
             else
                 echo "[HAPROXY] Configuration ${haproxy_cfg_file} is up-to-date"
             fi
@@ -938,8 +940,10 @@ EOF_BK_CERTBOT
                 mkdir -p /run/haproxy /etc/haproxy 2>/dev/null || true
                 [ -f "$tmp_cfg" ] && cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
                 if systemctl is-active --quiet haproxy 2>/dev/null; then
-                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
-                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
+                    if [ "$haproxy_changed" -eq 1 ]; then
+                        systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
+                        echo "[HAPROXY] Reloaded native systemd haproxy.service"
+                    fi
                 else
                     systemctl enable haproxy >/dev/null 2>&1 || true
                     systemctl restart haproxy >/dev/null 2>&1 || true
