@@ -220,6 +220,26 @@ generate_nginx_conf() {
         c_cert="${live_dir}/fullchain.pem"
         c_key="${live_dir}/privkey.pem"
         if [ -f "$c_cert" ] && [ -f "$c_key" ] && [ "$c_cert" != "$cert" ]; then
+            web_proxy_loc="        location / {
+            try_files \$uri \$uri/ \$uri.html /index.html =404;
+        }"
+            # Проверяем, настроен ли Telegram WEB Proxy на этот домен
+            if [ -f "/etc/tproxy-server/credentials.env" ]; then
+                tproxy_dom=$(grep -E '^WEB_PROXY_DOMAIN=' /etc/tproxy-server/credentials.env 2>/dev/null | cut -d= -f2 | tr -d '"'\'' ')
+                if [ -n "$tproxy_dom" ] && [ "$tproxy_dom" = "$c_dom" ]; then
+                    web_proxy_loc="        location / {
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }"
+                fi
+            fi
+
             extra_servers="${extra_servers}
 
     server {
@@ -238,9 +258,7 @@ generate_nginx_conf() {
         root ${PUBLIC_DIR};
         index index.html;
 
-        location / {
-            try_files \$uri \$uri/ \$uri.html /index.html =404;
-        }
+${web_proxy_loc}
 
         location = /favicon.ico {
             log_not_found off;
@@ -254,7 +272,7 @@ generate_nginx_conf() {
 
         location /api/health {
             default_type application/json;
-            return 200 '{"status":"healthy","service":"shopflow-edge","version":"4.8.2"}';
+            return 200 '{\"status\":\"healthy\",\"service\":\"shopflow-edge\",\"version\":\"4.8.2\"}';
         }
 
         location ~ /\. {
@@ -284,6 +302,11 @@ http {
     server_tokens off;
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
+
+    map \$http_upgrade \$connection_upgrade {
+        default upgrade;
+        '' close;
+    }
 
     server {
         ${nginx_http2_listen}
