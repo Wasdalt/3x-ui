@@ -1630,6 +1630,25 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
 fi
 
 date +%s > "/run/x-ui-fork-db-apply.last" 2>/dev/null || true
+if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_PATH" "
+SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id;
+SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id;
+SELECT key, value FROM settings WHERE key IN (
+  'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
+  'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
+) ORDER BY key;
+SELECT count(*) FROM users;
+SELECT count(*) FROM inbounds;
+SELECT count(*) FROM client_traffics;
+" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 > "/run/x-ui-fork-db-apply.sig" 2>/dev/null || true
 
+    sqlite3 "$DB_PATH" "
+SELECT key, value FROM settings WHERE key IN (
+  'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
+  'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
+) ORDER BY key;
+" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 > "/run/x-ui-fork-web-sub.sig" 2>/dev/null || true
+fi
 
 echo "Configuration applied!"

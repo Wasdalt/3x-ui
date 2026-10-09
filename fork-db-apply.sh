@@ -13,6 +13,7 @@ XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
 LOCK_FILE="/run/x-ui-fork-db-apply.lock"
 SIG_FILE="/run/x-ui-fork-db-apply.sig"
 DEBOUNCE_FILE="/run/x-ui-fork-db-apply.last"
+WEB_SUB_SIG_FILE="/run/x-ui-fork-web-sub.sig"
 DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 
 [ -f "$DB_PATH" ] || exit 0
@@ -24,7 +25,30 @@ if [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 5 ]; t
     exit 0
 fi
 
-current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+calc_sig() {
+    sqlite3 "$DB_PATH" "
+SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id;
+SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id;
+SELECT key, value FROM settings WHERE key IN (
+  'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
+  'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
+) ORDER BY key;
+SELECT count(*) FROM users;
+SELECT count(*) FROM inbounds;
+SELECT count(*) FROM client_traffics;
+" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo ""
+}
+
+calc_web_sub_sig() {
+    sqlite3 "$DB_PATH" "
+SELECT key, value FROM settings WHERE key IN (
+  'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
+  'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
+) ORDER BY key;
+" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo ""
+}
+
+current_sig=$(calc_sig)
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 
 if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
@@ -44,8 +68,10 @@ fi
 
 sleep 1
 
-current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+current_sig=$(calc_sig)
 echo "$current_sig" > "$SIG_FILE" 2>/dev/null || true
+
+last_web_sub=$(cat "$WEB_SUB_SIG_FILE" 2>/dev/null || echo "")
 
 if [ -x "${XUI_DIR}/fork-sync.sh" ]; then
     "${XUI_DIR}/fork-sync.sh" || true
@@ -65,7 +91,19 @@ if [ -x "${XUI_DIR}/init-config.sh" ]; then
     "${XUI_DIR}/init-config.sh" || echo "[FORK-DB-APPLY] init-config.sh exited non-zero (non-fatal)"
 fi
 
-new_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
+new_sig=$(calc_sig)
 if [ -n "$new_sig" ]; then
     echo "$new_sig" > "$SIG_FILE" 2>/dev/null || true
+fi
+
+new_web_sub=$(calc_web_sub_sig)
+if [ -n "$new_web_sub" ]; then
+    echo "$new_web_sub" > "$WEB_SUB_SIG_FILE" 2>/dev/null || true
+    # Если изменились параметры веб-панели или сервера подписки (порт, сертификаты, домен) — перезапускаем x-ui
+    if [ -n "$last_web_sub" ] && [ "$new_web_sub" != "$last_web_sub" ]; then
+        echo "[FORK-DB-APPLY] Web/Subscription settings changed, restarting x-ui service..."
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart x-ui 2>/dev/null || true
+        fi
+    fi
 fi

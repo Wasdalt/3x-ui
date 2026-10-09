@@ -360,6 +360,7 @@ StartLimitIntervalSec=0
 
 [Path]
 PathChanged=${XUI_CONFIG_DIR}/x-ui.db
+PathModified=${XUI_CONFIG_DIR}/x-ui.db
 Unit=x-ui-fork-db-apply.service
 
 [Install]
