@@ -783,18 +783,12 @@ ORDER BY id ASC;
                 case "$s" in
                     ""|localhost|127.0.0.1|*:[0-9]*) continue ;;
                     [0-9]*.[0-9]*.[0-9]*.[0-9]*) continue ;;
-                    *)
-                        if [ "$selfsteal_enabled" -eq 1 ] && [ "$s" = "$selfsteal_domain" ]; then
-                            # Do not let an inbound hijack the decoy website domain
-                            continue
-                        fi
-                        clean_snis="$clean_snis $s"
-                        ;;
+                    *) clean_snis="$clean_snis $s" ;;
                 esac
             done
 
-            # If TLS inbound has no distinct domain SNI, do NOT fallback to selfsteal_domain (prevents routing loop)
-            if [ -z "$clean_snis" ] && [ "$sec" = "tls" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "$selfsteal_domain" ]; then
+            # If TLS inbound has no distinct domain SNI, fallback to target_domain
+            if [ -z "$clean_snis" ] && [ "$sec" = "tls" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ]; then
                 clean_snis="$target_domain"
             fi
 
@@ -843,18 +837,17 @@ frontend fe_tls_in
 
 EOF_HAPROXY_HEAD
 
-        if [ "$selfsteal_enabled" -eq 1 ]; then
-            cat << EOF_SS_TOP >> "$tmp_cfg"
-    # SelfSteal Decoy Site (always handles own domain directly)
-    use_backend bk_selfsteal if { req_ssl_sni -i ${selfsteal_domain} }
-
-EOF_SS_TOP
-        fi
-
-        # SNI Routing for 3x-ui inbounds
+        # SNI Routing for 3x-ui inbounds (Reality SelfSteal and custom SNIs take precedence)
         grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
 
         if [ "$selfsteal_enabled" -eq 1 ]; then
+            # If target_domain is not explicitly routed to an inbound, route it to SelfSteal decoy
+            if ! grep -q -- "-i ${selfsteal_domain}" "$tmp_cfg" 2>/dev/null; then
+                cat << EOF_SS_RULE >> "$tmp_cfg"
+    use_backend bk_selfsteal if { req_ssl_sni -i ${selfsteal_domain} }
+EOF_SS_RULE
+            fi
+
             cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
 
     # Default fallback: SelfSteal Decoy Site (active probing / non-Reality / direct IP)
