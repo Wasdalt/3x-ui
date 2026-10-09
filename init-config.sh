@@ -759,15 +759,21 @@ ORDER BY id ASC;
         cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
 global
     log stdout format raw local0
-    maxconn 4096
+    maxconn 8192
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    hard-stop-after 30s
 
 defaults
     log global
     mode tcp
     option tcplog
     timeout connect 5s
-    timeout client 30s
-    timeout server 30s
+    timeout client 1h
+    timeout server 1h
+    timeout tunnel 1h
+    retries 3
+    option redispatch
 
 frontend fe_http_in
     bind :80
@@ -874,19 +880,28 @@ EOF_BK_CERTBOT
                 chmod 644 "$haproxy_cfg_file"
                 echo "[HAPROXY] Generated and updated ${haproxy_cfg_file}"
 
-                # Also sync to /etc/haproxy/haproxy.cfg if native haproxy directory exists
-                if [ -d "/etc/haproxy" ]; then
-                    cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
-                fi
+                # Guarantee sync to /etc/haproxy/haproxy.cfg
+                mkdir -p /etc/haproxy /run/haproxy 2>/dev/null || true
+                cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
+                chmod 644 /etc/haproxy/haproxy.cfg 2>/dev/null || true
             else
                 echo "[HAPROXY] Configuration ${haproxy_cfg_file} is up-to-date"
             fi
 
             # Ensure HAProxy is running and up-to-date (native systemd or Docker container)
             if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+                mkdir -p /run/haproxy /etc/haproxy 2>/dev/null || true
+                [ -f "$tmp_cfg" ] && cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
                 if systemctl is-active --quiet haproxy 2>/dev/null; then
-                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
-                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
+                    if systemctl reload haproxy >/dev/null 2>&1; then
+                        echo "[HAPROXY] Reloaded native systemd haproxy.service (zero-downtime)"
+                    else
+                        hpid=$(pidof haproxy 2>/dev/null | awk '{print $1}')
+                        if [ -n "$hpid" ]; then
+                            kill -USR2 "$hpid" 2>/dev/null || true
+                            echo "[HAPROXY] Reloaded native haproxy via USR2 socket handover"
+                        fi
+                    fi
                 else
                     systemctl enable haproxy >/dev/null 2>&1 || true
                     systemctl restart haproxy >/dev/null 2>&1 || true
