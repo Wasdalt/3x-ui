@@ -1437,7 +1437,7 @@ fi
 set_always "webPort" "$XUI_PORT"
 
 if [ -n "$fallback_web_cert" ] && [ "$CERT_FILE" = "$fallback_web_cert" ]; then
-    effective_domain="$server_ip"
+    effective_domain=""
 else
     effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
 fi
