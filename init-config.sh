@@ -744,6 +744,19 @@ WHERE enable = 1
   );
 " 2>/dev/null || true
 
+    # Automatically bind routed TCP inbounds to 127.0.0.1 to hide backend ports from port scanners
+    case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
+        true|TRUE|1|yes|YES|on|ON)
+            sqlite_db "
+UPDATE inbounds
+SET listen = '127.0.0.1'
+WHERE enable = 1
+  AND protocol != 'hysteria'
+  AND (listen = '' OR listen = '0.0.0.0' OR listen IS NULL);
+" 2>/dev/null || true
+            ;;
+    esac
+
     # 4. Generate HAProxy configuration from active inbounds
     rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, stream_settings
