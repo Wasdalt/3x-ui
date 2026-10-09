@@ -100,7 +100,7 @@ new_web_sub=$(calc_web_sub_sig)
 if [ -n "$new_web_sub" ]; then
     echo "$new_web_sub" > "$WEB_SUB_SIG_FILE" 2>/dev/null || true
     # Если изменились параметры веб-панели или сервера подписки (порт, сертификаты, домен) — перезапускаем x-ui
-    if [ -n "$last_web_sub" ] && [ "$new_web_sub" != "$last_web_sub" ]; then
+    if [ "$new_web_sub" != "$last_web_sub" ]; then
         echo "[FORK-DB-APPLY] Web/Subscription settings changed, restarting x-ui service..."
         if command -v systemctl >/dev/null 2>&1; then
             systemctl restart x-ui 2>/dev/null || true
