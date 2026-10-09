@@ -941,12 +941,12 @@ EOF_BK_CERTBOT
         rm -f "$tmp_cfg" "$tmp_parts"
 
     # 5. Synchronize hosts table (nodes for subscriptions)
-    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain}..."
+    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
     now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 
-    force_all_443=0
-    case "${XUI_HOSTS_FORCE_443:-false}" in
-        true|TRUE|1|yes|YES) force_all_443=1 ;;
+    force_all_443=1
+    case "${XUI_HOSTS_FORCE_443:-true}" in
+        false|FALSE|0|no|NO) force_all_443=0 ;;
     esac
 
     # Ensure each active inbound has an entry in hosts pointing to target_domain
@@ -973,7 +973,7 @@ EOF_BK_CERTBOT
             esc_sec=$(sqlite_escape "$sec")
 
             target_port=443
-            if [ "$sec" = "reality" ] && [ "$force_all_443" -eq 0 ]; then
+            if [ "$force_all_443" -eq 0 ] && [ "$sec" = "reality" ]; then
                 target_port="$port"
             fi
 
@@ -996,10 +996,9 @@ EOF_BK_CERTBOT
                         ;;
                 esac
 
-                # Reality inbounds MUST NOT be forced to port 443 because Russian TSPU
-                # blocks spoofed SNIs on port 443 with SNI-mismatch filtering.
-                # Use inbound port or custom port if set.
-                if [ "$sec" = "reality" ] && [ "$force_all_443" -eq 0 ]; then
+                if [ "$force_all_443" -eq 1 ]; then
+                    host_port=443
+                elif [ "$sec" = "reality" ]; then
                     if [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$curr_port" != "443" ]; then
                         host_port="$curr_port"
                     else
