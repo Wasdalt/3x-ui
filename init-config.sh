@@ -772,21 +772,15 @@ ORDER BY id ASC;
         cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
 global
     log stdout format raw local0
-    maxconn 8192
-    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
-    stats timeout 30s
-    hard-stop-after 30s
+    maxconn 4096
 
 defaults
     log global
     mode tcp
     option tcplog
     timeout connect 5s
-    timeout client 1h
-    timeout server 1h
-    timeout tunnel 1h
-    retries 3
-    option redispatch
+    timeout client 30s
+    timeout server 30s
 
 frontend fe_http_in
     bind :80
@@ -906,15 +900,8 @@ EOF_BK_CERTBOT
                 mkdir -p /run/haproxy /etc/haproxy 2>/dev/null || true
                 [ -f "$tmp_cfg" ] && cat "$tmp_cfg" > /etc/haproxy/haproxy.cfg 2>/dev/null || true
                 if systemctl is-active --quiet haproxy 2>/dev/null; then
-                    if systemctl reload haproxy >/dev/null 2>&1; then
-                        echo "[HAPROXY] Reloaded native systemd haproxy.service (zero-downtime)"
-                    else
-                        hpid=$(pidof haproxy 2>/dev/null | awk '{print $1}')
-                        if [ -n "$hpid" ]; then
-                            kill -USR2 "$hpid" 2>/dev/null || true
-                            echo "[HAPROXY] Reloaded native haproxy via USR2 socket handover"
-                        fi
-                    fi
+                    systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy >/dev/null 2>&1 || true
+                    echo "[HAPROXY] Reloaded native systemd haproxy.service"
                 else
                     systemctl enable haproxy >/dev/null 2>&1 || true
                     systemctl restart haproxy >/dev/null 2>&1 || true
