@@ -663,13 +663,28 @@ WHERE key = 'xrayTemplateConfig'
   AND json_extract(value, '$.metrics.listen') = '127.0.0.1:11111';
 " >/dev/null 2>&1 || true
 
-    inbound_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol != 'hysteria' LIMIT 1;" 2>/dev/null || echo "")
-    if [ -n "$inbound_443" ]; then
-        echo "[HAPROXY] Inbound id=${inbound_443} is listening on 443, shifting to internal port 10443 for HAProxy"
-        sqlite_db "UPDATE inbounds SET port = 10443 WHERE id = ${inbound_443};"
-    fi
-
     selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
+    inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol != 'hysteria';" 2>/dev/null || echo "")
+    if [ -n "$inbounds_443" ]; then
+        shift_port=10443
+        for i_id in $inbounds_443; do
+            [ -n "$i_id" ] || continue
+            while true; do
+                if [ "$shift_port" -eq "$selfsteal_port_safe" ] || [ "$shift_port" -eq 443 ]; then
+                    shift_port=$((shift_port + 1))
+                    continue
+                fi
+                taken=$(sqlite_db "SELECT id FROM inbounds WHERE port = ${shift_port} LIMIT 1;" 2>/dev/null || echo "")
+                if [ -z "$taken" ]; then
+                    break
+                fi
+                shift_port=$((shift_port + 1))
+            done
+            echo "[HAPROXY] Inbound id=${i_id} is listening on 443, shifting to internal port ${shift_port} for HAProxy"
+            sqlite_db "UPDATE inbounds SET port = ${shift_port} WHERE id = ${i_id};"
+            shift_port=$((shift_port + 1))
+        done
+    fi
     reality_rows=$(sqlite_db -separator '|' "
 SELECT id, stream_settings
 FROM inbounds
@@ -742,6 +757,15 @@ ORDER BY id ASC;
     tmp_cfg=$(mktemp)
     tmp_parts=$(mktemp)
 
+    # SelfSteal Decoy Site integration settings
+    selfsteal_enabled=0
+    case "${XUI_SELFSTEAL_ENABLE:-true}" in
+        true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
+    esac
+
+    selfsteal_domain="${XUI_SELFSTEAL_DOMAIN:-${target_domain}}"
+    selfsteal_port="${XUI_SELFSTEAL_PORT:-10444}"
+
     if [ -n "$rows" ]; then
         printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
             [ -n "$id" ] || continue
@@ -759,12 +783,18 @@ ORDER BY id ASC;
                 case "$s" in
                     ""|localhost|127.0.0.1|*:[0-9]*) continue ;;
                     [0-9]*.[0-9]*.[0-9]*.[0-9]*) continue ;;
-                    *) clean_snis="$clean_snis $s" ;;
+                    *)
+                        if [ "$selfsteal_enabled" -eq 1 ] && [ "$s" = "$selfsteal_domain" ]; then
+                            # Do not let an inbound hijack the decoy website domain
+                            continue
+                        fi
+                        clean_snis="$clean_snis $s"
+                        ;;
                 esac
             done
 
-            # If TLS inbound has no domain SNI, fallback to target_domain
-            if [ -z "$clean_snis" ] && [ "$sec" = "tls" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ]; then
+            # If TLS inbound has no distinct domain SNI, do NOT fallback to selfsteal_domain (prevents routing loop)
+            if [ -z "$clean_snis" ] && [ "$sec" = "tls" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "$selfsteal_domain" ]; then
                 clean_snis="$target_domain"
             fi
 
@@ -780,7 +810,7 @@ ORDER BY id ASC;
         done
     fi
 
-        cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
+        cat << EOF_HAPROXY_HEAD > "$tmp_cfg"
 global
     log stdout format raw local0
     maxconn 8192
@@ -811,28 +841,20 @@ frontend fe_tls_in
     tcp-request content accept if { req_ssl_hello_type 1 }
     log-format "%ci:%cp [%t] %ft %b/%s %Tw/%Tc/%Tt %B %ts SNI:%[var(sess.sni)]"
 
-    # SNI Routing for 3x-ui inbounds
 EOF_HAPROXY_HEAD
 
-        # SelfSteal Decoy Site integration
-        selfsteal_enabled=0
-        case "${XUI_SELFSTEAL_ENABLE:-true}" in
-            true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
-        esac
+        if [ "$selfsteal_enabled" -eq 1 ]; then
+            cat << EOF_SS_TOP >> "$tmp_cfg"
+    # SelfSteal Decoy Site (always handles own domain directly)
+    use_backend bk_selfsteal if { req_ssl_sni -i ${selfsteal_domain} }
 
-        selfsteal_domain="${XUI_SELFSTEAL_DOMAIN:-${target_domain}}"
-        selfsteal_port="${XUI_SELFSTEAL_PORT:-10444}"
+EOF_SS_TOP
+        fi
 
+        # SNI Routing for 3x-ui inbounds
         grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
 
         if [ "$selfsteal_enabled" -eq 1 ]; then
-            # If target_domain is not explicitly routed to an inbound, route it to SelfSteal decoy
-            if ! grep -q -- "-i ${selfsteal_domain}" "$tmp_cfg" 2>/dev/null; then
-                cat << EOF_SS_RULE >> "$tmp_cfg"
-    use_backend bk_selfsteal if { req_ssl_sni -i ${selfsteal_domain} }
-EOF_SS_RULE
-            fi
-
             cat << EOF_HAPROXY_DEF >> "$tmp_cfg"
 
     # Default fallback: SelfSteal Decoy Site (active probing / non-Reality / direct IP)
@@ -849,6 +871,10 @@ EOF_HAPROXY_DEF
 
         grep "^BACKEND:" "$tmp_parts" 2>/dev/null | while IFS='|' read -r raw_bk port; do
             bk=$(echo "$raw_bk" | cut -d: -f2)
+            # Guard against routing loop to port 443
+            if [ "$port" = "443" ]; then
+                port=10443
+            fi
             cat << EOF_BK >> "$tmp_cfg"
 
 backend ${bk}
