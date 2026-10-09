@@ -90,6 +90,11 @@ switch_template() {
 
 resolve_ssl_certs() {
     target_domain="${XUI_SELFSTEAL_DOMAIN:-${XUI_HAPROXY_DOMAIN:-${XUI_DOMAIN:-}}}"
+    if [ -z "$target_domain" ] && [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+        db_sub=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='subDomain';" 2>/dev/null || echo "")
+        db_web=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
+        target_domain="${db_sub:-${db_web}}"
+    fi
     cert=""
     key=""
 
@@ -250,10 +255,12 @@ generate_nginx_conf() {
         ssl_certificate ${c_cert};
         ssl_certificate_key ${c_key};
         ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers HIGH:!aNULL:!MD5;
-        ssl_prefer_server_ciphers on;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+        ssl_ecdh_curve X25519:prime256v1:secp384r1;
+        ssl_prefer_server_ciphers off;
         ssl_session_cache shared:SSL:10m;
         ssl_session_timeout 1d;
+        ssl_session_tickets on;
 
         root ${PUBLIC_DIR};
         index index.html;
@@ -311,15 +318,17 @@ http {
     server {
         ${nginx_http2_listen}
         ${nginx_http2_line}
-        server_name _;
+        server_name _ ${target_domain};
 
         ssl_certificate ${cert};
         ssl_certificate_key ${key};
         ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers HIGH:!aNULL:!MD5;
-        ssl_prefer_server_ciphers on;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+        ssl_ecdh_curve X25519:prime256v1:secp384r1;
+        ssl_prefer_server_ciphers off;
         ssl_session_cache shared:SSL:10m;
         ssl_session_timeout 1d;
+        ssl_session_tickets on;
 
         root ${PUBLIC_DIR};
         index index.html;
