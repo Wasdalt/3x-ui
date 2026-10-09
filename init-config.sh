@@ -73,6 +73,17 @@ fi
 
 echo "Applying environment configuration..."
 
+# Network & TCP stack tuning to prevent hanging / stale TCP sessions
+if command -v sysctl >/dev/null 2>&1; then
+    sysctl -q -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
+    sysctl -q -w net.ipv4.tcp_fin_timeout=15 2>/dev/null || true
+    sysctl -q -w net.ipv4.tcp_keepalive_time=300 2>/dev/null || true
+    sysctl -q -w net.ipv4.tcp_keepalive_intvl=15 2>/dev/null || true
+    sysctl -q -w net.ipv4.tcp_keepalive_probes=5 2>/dev/null || true
+    sysctl -q -w net.core.somaxconn=65535 2>/dev/null || true
+    sysctl -q -w net.ipv4.tcp_max_syn_backlog=8192 2>/dev/null || true
+fi
+
 sqlite_escape() {
     printf "%s" "$1" | sed "s/'/''/g"
 }
@@ -772,15 +783,16 @@ ORDER BY id ASC;
         cat << 'EOF_HAPROXY_HEAD' > "$tmp_cfg"
 global
     log stdout format raw local0
-    maxconn 4096
+    maxconn 8192
 
 defaults
     log global
     mode tcp
     option tcplog
     timeout connect 5s
-    timeout client 30s
-    timeout server 30s
+    timeout client 1h
+    timeout server 1h
+    timeout tunnel 1h
 
 frontend fe_http_in
     bind :80
@@ -850,7 +862,7 @@ EOF_BK
 
 backend bk_selfsteal
     mode tcp
-    server srv_decoy 127.0.0.1:${selfsteal_port} check
+    server srv_decoy 127.0.0.1:${selfsteal_port}
 EOF_BK_SS
         fi
 

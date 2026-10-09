@@ -227,7 +227,10 @@ case "${1:-help}" in
         if systemctl is-active --quiet haproxy 2>/dev/null; then
             systemctl restart haproxy 2>/dev/null || true
         fi
-        echo -e "${green}x-ui и haproxy перезапущены${plain}"
+        if systemctl is-active --quiet x-ui-decoy 2>/dev/null; then
+            systemctl restart x-ui-decoy 2>/dev/null || true
+        fi
+        echo -e "${green}x-ui, haproxy и x-ui-decoy перезапущены${plain}"
         ;;
     status)
         need_root
