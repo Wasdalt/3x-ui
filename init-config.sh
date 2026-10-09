@@ -941,10 +941,15 @@ EOF_BK_CERTBOT
         rm -f "$tmp_cfg" "$tmp_parts"
 
     # 5. Synchronize hosts table (nodes for subscriptions)
-    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
+    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain}..."
     now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 
-    # Ensure each active inbound has an entry in hosts pointing to target_domain:443
+    force_all_443=0
+    case "${XUI_HOSTS_FORCE_443:-false}" in
+        true|TRUE|1|yes|YES) force_all_443=1 ;;
+    esac
+
+    # Ensure each active inbound has an entry in hosts pointing to target_domain
     if [ -n "$rows" ]; then
         order=1
         printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
@@ -967,10 +972,16 @@ EOF_BK_CERTBOT
             esc_sni=$(sqlite_escape "$sni")
             esc_sec=$(sqlite_escape "$sec")
 
-            existing_host=$(sqlite_db -separator '|' "SELECT id, address FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
+            target_port=443
+            if [ "$sec" = "reality" ] && [ "$force_all_443" -eq 0 ]; then
+                target_port="$port"
+            fi
+
+            existing_host=$(sqlite_db -separator '|' "SELECT id, address, port FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
                 host_id=$(echo "$existing_host" | cut -d'|' -f1)
                 curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
+                curr_port=$(echo "$existing_host" | cut -d'|' -f3)
 
                 case "$curr_addr" in
                     ""|localhost|127.0.0.1|0.0.0.0)
@@ -985,11 +996,25 @@ EOF_BK_CERTBOT
                         ;;
                 esac
 
+                # Reality inbounds MUST NOT be forced to port 443 because Russian TSPU
+                # blocks spoofed SNIs on port 443 with SNI-mismatch filtering.
+                # Use inbound port or custom port if set.
+                if [ "$sec" = "reality" ] && [ "$force_all_443" -eq 0 ]; then
+                    if [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$curr_port" != "443" ]; then
+                        host_port="$curr_port"
+                    else
+                        host_port="$port"
+                    fi
+                else
+                    host_port="${curr_port:-443}"
+                    [ -n "$host_port" ] && [ "$host_port" -gt 0 ] 2>/dev/null || host_port=443
+                fi
+
                 esc_host_addr=$(sqlite_escape "$host_addr")
                 sqlite_db "
 UPDATE hosts
 SET address = '${esc_host_addr}',
-    port = 443,
+    port = ${host_port},
     sni = '${esc_sni}',
     security = '${esc_sec}',
     remark = '${esc_remark}',
@@ -1016,7 +1041,7 @@ INSERT INTO hosts (
     shuffle_host, node_guids, created_at, updated_at
 ) VALUES (
     '${group_id}', ${id}, ${order}, '${esc_remark}', '',
-    0, 0, '', '${esc_host_addr}', 443,
+    0, 0, '', '${esc_host_addr}', ${target_port},
     '${esc_sec}', '${esc_sni}', '', '', '[]',
     '', 0, 0,
     '[]', '', 0,
