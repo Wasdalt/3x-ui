@@ -705,6 +705,19 @@ WHERE enable = 1
   );
 " 2>/dev/null || true
 
+    # Fix Reality inbounds with empty minClientVer causing Xray v26 client version rejection
+    sqlite_db "
+UPDATE inbounds
+SET stream_settings = json_set(stream_settings, '$.realitySettings.minClientVer', '1.0.0')
+WHERE enable = 1
+  AND json_valid(stream_settings) = 1
+  AND json_extract(stream_settings, '$.security') = 'reality'
+  AND (
+    json_extract(stream_settings, '$.realitySettings.minClientVer') IS NULL
+    OR json_extract(stream_settings, '$.realitySettings.minClientVer') = ''
+  );
+" 2>/dev/null || true
+
     # 4. Generate HAProxy configuration from active inbounds
     rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, stream_settings
