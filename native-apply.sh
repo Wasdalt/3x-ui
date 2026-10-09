@@ -131,6 +131,8 @@ if [ -x "${XUI_DIR}/fork-db-apply.sh" ]; then
 [Unit]
 Description=Apply x-ui fork DB/env configuration
 After=x-ui.service
+StartLimitIntervalSec=20
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -146,7 +148,6 @@ Description=Watch x-ui database changes for fork configuration
 
 [Path]
 PathChanged=${XUI_CONFIG_DIR}/x-ui.db
-PathModified=${XUI_CONFIG_DIR}/x-ui.db
 Unit=x-ui-fork-db-apply.service
 
 [Install]
@@ -154,6 +155,7 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
+    systemctl reset-failed x-ui-fork-db-apply.service x-ui-fork-db-apply.path >/dev/null 2>&1 || true
     systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
     echo -e "${green}  ✓ DB apply path enabled${plain}"
 fi

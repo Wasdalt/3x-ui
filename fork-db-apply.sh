@@ -12,10 +12,17 @@ XUI_ENV_FILE="${XUI_ENV_FILE:-${XUI_CONFIG_DIR}/.env}"
 XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
 LOCK_FILE="/run/x-ui-fork-db-apply.lock"
 SIG_FILE="/run/x-ui-fork-db-apply.sig"
+DEBOUNCE_FILE="/run/x-ui-fork-db-apply.last"
 DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 
 [ -f "$DB_PATH" ] || exit 0
 command -v sqlite3 >/dev/null 2>&1 || exit 0
+
+now=$(date +%s 2>/dev/null || echo 0)
+last_run=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
+if [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 5 ]; then
+    exit 0
+fi
 
 current_sig=$(sqlite3 "$DB_PATH" "SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id; SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id; SELECT key, value FROM settings WHERE key IN ('webPort','webDomain','webCertFile','webKeyFile','subDomain') ORDER BY key;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "")
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
@@ -23,6 +30,7 @@ last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
     exit 0
 fi
+echo "$now" > "$DEBOUNCE_FILE" 2>/dev/null || true
 
 exec 9>"$LOCK_FILE"
 if command -v flock >/dev/null 2>&1; then

@@ -1619,4 +1619,7 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
     fi
 fi
 
+date +%s > "/run/x-ui-fork-db-apply.last" 2>/dev/null || true
+
+
 echo "Configuration applied!"
