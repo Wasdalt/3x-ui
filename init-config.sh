@@ -1031,18 +1031,22 @@ EOF_BK_CERTBOT
                 curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
                 curr_port=$(echo "$existing_host" | cut -d'|' -f3)
 
-                case "$curr_addr" in
-                    ""|localhost|127.0.0.1|0.0.0.0)
-                        if [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
-                            host_addr="$sni"
-                        else
-                            host_addr="$target_domain"
-                        fi
-                        ;;
-                    *)
-                        host_addr="$curr_addr"
-                        ;;
-                esac
+                if [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+                    host_addr="$XUI_HAPROXY_DOMAIN"
+                else
+                    case "$curr_addr" in
+                        ""|localhost|127.0.0.1|0.0.0.0)
+                            if [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
+                                host_addr="$sni"
+                            else
+                                host_addr="$target_domain"
+                            fi
+                            ;;
+                        *)
+                            host_addr="$curr_addr"
+                            ;;
+                    esac
+                fi
 
                 if [ "$force_all_443" -eq 1 ]; then
                     host_port=443
