@@ -252,6 +252,8 @@ generate_nginx_conf() {
         ${nginx_http2_line}
         server_name ${c_dom};
 
+        error_page 497 =301 https://\$host\$request_uri;
+
         ssl_certificate ${c_cert};
         ssl_certificate_key ${c_key};
         ssl_protocols TLSv1.2 TLSv1.3;
@@ -319,6 +321,8 @@ http {
         ${nginx_http2_listen}
         ${nginx_http2_line}
         server_name _ ${target_domain};
+
+        error_page 497 =301 https://\$host\$request_uri;
 
         ssl_certificate ${cert};
         ssl_certificate_key ${key};
