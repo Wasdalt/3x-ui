@@ -61,10 +61,12 @@ if [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply
     echo "$PROJECT_DIR" > "$PROJECT_DIR_FILE" 2>/dev/null || true
 fi
 
+ORIGINAL_ARGS=("$@")
+
 need_root() {
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo >/dev/null 2>&1; then
-            exec sudo "$0" "$@"
+            exec sudo "$0" "${ORIGINAL_ARGS[@]}"
         else
             echo -e "${red}Ошибка: запустите от root или через sudo${plain}"
             exit 1
