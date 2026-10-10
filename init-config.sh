@@ -752,6 +752,13 @@ WHERE enable = 1
   );
 " 2>/dev/null || true
 
+    # Sanitize invalid domain names in listen: Xray fails to start if listen is a domain name
+    sqlite_db "
+UPDATE inbounds
+SET listen = '127.0.0.1'
+WHERE listen GLOB '*[a-zA-Z]*';
+" 2>/dev/null || true
+
     # Automatically bind routed TCP inbounds to 127.0.0.1 to hide backend ports from port scanners
     # (Direct protocols like Shadowsocks, Hysteria, WireGuard, Socks, mKCP, raw TCP must listen publicly on 0.0.0.0)
     # Never bind to 127.0.0.1 if host for this inbound is disabled (is_disabled = 1) in hosts table
@@ -767,7 +774,7 @@ WHERE enable = 1
     json_extract(stream_settings, '$.security') IN ('reality', 'tls')
     OR json_extract(stream_settings, '$.network') IN ('xhttp', 'splithttp', 'ws', 'upgrade', 'httpupgrade', 'grpc')
   )
-  AND (listen = '' OR listen = '0.0.0.0' OR listen IS NULL)
+  AND (listen != '127.0.0.1')
   AND id NOT IN (
     SELECT inbound_id FROM hosts WHERE is_disabled = 1
   );
