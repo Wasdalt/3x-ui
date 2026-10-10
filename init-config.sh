@@ -773,7 +773,7 @@ WHERE enable = 1
   );
 
 UPDATE inbounds
-SET listen = '0.0.0.0'
+SET listen = ''
 WHERE enable = 1
   AND (
     protocol IN ('mtproto', 'mixed', 'socks', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'wireguard')
@@ -786,7 +786,7 @@ WHERE enable = 1
       SELECT inbound_id FROM hosts WHERE is_disabled = 1
     )
   )
-  AND listen = '127.0.0.1';
+  AND (listen = '127.0.0.1' OR listen = '0.0.0.0');
 " 2>/dev/null || true
             ;;
     esac
@@ -1824,8 +1824,8 @@ fi
 date +%s > "/run/x-ui-fork-db-apply.last" 2>/dev/null || true
 if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
     sqlite3 "$DB_PATH" "
-SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id;
-SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id;
+SELECT id, port, enable, listen, stream_settings FROM inbounds ORDER BY id;
+SELECT id, inbound_id, address, port, sni, COALESCE(is_disabled, 0) FROM hosts ORDER BY id;
 SELECT key, value FROM settings WHERE key IN (
   'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
   'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'

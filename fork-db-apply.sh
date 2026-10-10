@@ -36,8 +36,8 @@ fi
 
 calc_sig() {
     sqlite3 "$DB_PATH" "
-SELECT id, port, enable, stream_settings FROM inbounds ORDER BY id;
-SELECT id, inbound_id, address, port, sni FROM hosts ORDER BY id;
+SELECT id, port, enable, listen, stream_settings FROM inbounds ORDER BY id;
+SELECT id, inbound_id, address, port, sni, COALESCE(is_disabled, 0) FROM hosts ORDER BY id;
 SELECT key, value FROM settings WHERE key IN (
   'webPort','webDomain','webCertFile','webKeyFile','webBasePath',
   'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
@@ -55,6 +55,10 @@ SELECT key, value FROM settings WHERE key IN (
   'subPort','subDomain','subCertFile','subKeyFile','subEnable','subPath','subURI'
 ) ORDER BY key;
 " 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo ""
+}
+
+calc_inbounds_listen_sig() {
+    sqlite3 "$DB_PATH" "SELECT id, listen FROM inbounds ORDER BY id;" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo ""
 }
 
 current_sig=$(calc_sig)
@@ -81,6 +85,7 @@ current_sig=$(calc_sig)
 echo "$current_sig" > "$SIG_FILE" 2>/dev/null || true
 
 last_web_sub=$(cat "$WEB_SUB_SIG_FILE" 2>/dev/null || echo "")
+last_listen_sig=$(calc_inbounds_listen_sig)
 
 if [ -x "${XUI_DIR}/fork-sync.sh" ]; then
     "${XUI_DIR}/fork-sync.sh" || true
@@ -105,14 +110,21 @@ if [ -n "$new_sig" ]; then
     echo "$new_sig" > "$SIG_FILE" 2>/dev/null || true
 fi
 
+new_listen_sig=$(calc_inbounds_listen_sig)
+listen_changed=0
+if [ "$new_listen_sig" != "$last_listen_sig" ]; then
+    listen_changed=1
+fi
+
 new_web_sub=$(calc_web_sub_sig)
 if [ -n "$new_web_sub" ]; then
     echo "$new_web_sub" > "$WEB_SUB_SIG_FILE" 2>/dev/null || true
-    # Если изменились параметры веб-панели или сервера подписки (порт, сертификаты, домен) — перезапускаем x-ui
-    if [ "$new_web_sub" != "$last_web_sub" ]; then
-        echo "[FORK-DB-APPLY] Web/Subscription settings changed, restarting x-ui service..."
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl restart x-ui 2>/dev/null || true
-        fi
+fi
+
+# Если изменились параметры веб-панели/подписки или сменился адрес привязки инбаунда (127.0.0.1 <-> 0.0.0.0) — перезапускаем x-ui
+if [ "$new_web_sub" != "$last_web_sub" ] || [ "$listen_changed" -eq 1 ]; then
+    echo "[FORK-DB-APPLY] Inbound listen address or web settings changed, restarting x-ui service..."
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart x-ui 2>/dev/null || true
     fi
 fi
