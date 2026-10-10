@@ -794,7 +794,7 @@ WHERE enable = 1
     # 4. Generate HAProxy configuration from active inbounds (TCP TLS and Reality only)
     # Exclude inbounds whose host is disabled (is_disabled = 1) in hosts table
     rows=$(sqlite_db -separator '|' "
-SELECT id, port, remark, protocol, stream_settings
+SELECT id, port, remark, protocol, replace(replace(stream_settings, char(10), ''), char(13), '')
 FROM inbounds
 WHERE enable = 1
   AND protocol NOT IN ('mtproto', 'mixed', 'socks', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'wireguard')
@@ -1069,7 +1069,9 @@ EOF_BK_CERTBOT
 
     # Ensure all active inbounds have accurate, synchronized host entries for subscriptions
     all_inbounds=$(sqlite_db -separator '|' "
-SELECT id, port, remark, protocol, stream_settings
+SELECT id, port, remark, protocol,
+       replace(replace(stream_settings, char(10), ''), char(13), ''),
+       CASE WHEN (settings LIKE '%xtls-rprx-vision%' OR stream_settings LIKE '%xtls-rprx-vision%') THEN 1 ELSE 0 END
 FROM inbounds
 WHERE enable = 1
 ORDER BY id ASC;
@@ -1077,7 +1079,7 @@ ORDER BY id ASC;
 
     if [ -n "$all_inbounds" ]; then
         order=1
-        printf "%s\n" "$all_inbounds" | while IFS='|' read -r id port remark proto stream; do
+        printf "%s\n" "$all_inbounds" | while IFS='|' read -r id port remark proto stream has_vision; do
             [ -n "$id" ] || continue
             
             # Transport network (tcp, ws, xhttp, splithttp, grpc, http, upgrade)
@@ -1127,7 +1129,7 @@ ORDER BY id ASC;
             sni=""
             case "$sec" in
                 reality)
-                    sni=$(echo "$stream" | jq -r '.realitySettings.serverNames[0] // ""' 2>/dev/null || echo "")
+                    sni=$(echo "$stream" | jq -r '(.realitySettings.serverNames[0] // .realitySettings.settings.serverName // "")' 2>/dev/null || echo "")
                     if [ -z "$sni" ]; then
                         sni=$(echo "$stream" | jq -r '.realitySettings.target // ""' 2>/dev/null | cut -d: -f1 || echo "")
                     fi
@@ -1149,14 +1151,15 @@ ORDER BY id ASC;
             fp=""
             case "$sec" in
                 reality)
-                    fp=$(echo "$stream" | jq -r '.realitySettings.fingerprint // ""' 2>/dev/null || echo "")
+                    fp=$(echo "$stream" | jq -r '(.realitySettings.settings.fingerprint // .realitySettings.fingerprint // "")' 2>/dev/null || echo "")
                     ;;
                 tls)
-                    fp=$(echo "$stream" | jq -r '.tlsSettings.fingerprint // ""' 2>/dev/null || echo "")
+                    fp=$(echo "$stream" | jq -r '(.tlsSettings.settings.fingerprint // .tlsSettings.fingerprint // "")' 2>/dev/null || echo "")
                     ;;
             esac
+            [ "$fp" = "null" ] || [ "$fp" = "none" ] && fp=""
             if [ "$sec" = "reality" ] || [ "$sec" = "tls" ]; then
-                [ -z "$fp" ] || [ "$fp" = "null" ] || [ "$fp" = "none" ] && fp="randomized"
+                [ -z "$fp" ] && fp="firefox"
             else
                 fp=""
             fi
@@ -1165,13 +1168,16 @@ ORDER BY id ASC;
             alpn="[]"
             case "$sec" in
                 tls)
-                    alpn=$(echo "$stream" | jq -c '.tlsSettings.alpn // []' 2>/dev/null || echo "[]")
+                    alpn=$(echo "$stream" | jq -c '(.tlsSettings.alpn // .tlsSettings.settings.alpn // [])' 2>/dev/null || echo "[]")
                     ;;
                 reality)
-                    alpn=$(echo "$stream" | jq -c '.realitySettings.alpn // []' 2>/dev/null || echo "[]")
+                    alpn=$(echo "$stream" | jq -c '(.realitySettings.alpn // .realitySettings.settings.alpn // [])' 2>/dev/null || echo "[]")
                     ;;
             esac
             [ -z "$alpn" ] || [ "$alpn" = "null" ] && alpn="[]"
+            if [ "$alpn" = "[]" ] && [ "$has_vision" -eq 1 ]; then
+                alpn='["http/1.1"]'
+            fi
 
             # 5. Determine target port and host security based on protocol, transport and security:
             case "$proto" in
