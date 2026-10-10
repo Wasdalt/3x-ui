@@ -1486,29 +1486,15 @@ SELECT value FROM settings WHERE key IN ('webDomain', 'subDomain') AND value != 
 " 2>/dev/null || true)
 
         db_hosts_doms=$(sqlite_db "
-SELECT address FROM hosts WHERE address != '' AND address NOT LIKE '127.%' AND address NOT LIKE '0.0.%';
+SELECT address FROM hosts WHERE address != '' AND address NOT LIKE '127.%' AND address NOT LIKE '0.0.%'
+UNION
+SELECT sni FROM hosts WHERE security = 'tls' AND sni != '' AND sni NOT LIKE '127.%' AND sni NOT LIKE '0.0.%';
 " 2>/dev/null || true)
 
-        all_candidate_domains=$(echo "$db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-}" | tr ' ' '\n' | sort -u)
+        # Support XUI_EXTRA_DOMAINS from .env (space- or comma-separated list of arbitrary domains/subdomains)
+        env_extra_doms=$(echo "${XUI_EXTRA_DOMAINS:-}" | tr ',' ' ')
 
-        # Include standard role subdomains (edge, ingest, dash, probe) if base domain is known
-        extra_subdomains=""
-        for base_dom in $all_candidate_domains; do
-            case "$base_dom" in
-                edge.*|ingest.*|dash.*|probe.*)
-                    parent_dom=$(echo "$base_dom" | cut -d. -f2-)
-                    if [ -n "$parent_dom" ] && [ "$parent_dom" != "$base_dom" ]; then
-                        extra_subdomains="$extra_subdomains $parent_dom edge.$parent_dom ingest.$parent_dom dash.$parent_dom probe.$parent_dom"
-                    fi
-                    ;;
-                ""|null|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
-                    ;;
-                *)
-                    extra_subdomains="$extra_subdomains edge.$base_dom ingest.$base_dom dash.$base_dom probe.$base_dom"
-                    ;;
-            esac
-        done
-        all_candidate_domains=$(echo "$all_candidate_domains $extra_subdomains" | tr ' ' '\n' | sort -u)
+        all_candidate_domains=$(echo "$db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-} $env_extra_doms" | tr ' ' '\n' | sort -u)
 
         decoy_updated=0
         for d in $all_candidate_domains; do
