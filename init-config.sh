@@ -576,9 +576,10 @@ WHERE id = ${inbound_id};
             continue
         fi
 
-        # 3. Only if current cert is missing from disk, fallback to target cert or self-signed
+        # 3. Only if current cert is missing from disk, use target cert as fallback without overwriting original serverName
+        keep_server="${current_server:-$target_domain}"
+        esc_keep_server=$(sqlite_escape "$keep_server")
         if [ "$has_target_cert" -eq 1 ]; then
-            esc_domain=$(sqlite_escape "$target_domain")
             esc_cert_file=$(sqlite_escape "$target_cert_file")
             esc_key_file=$(sqlite_escape "$target_key_file")
 
@@ -586,13 +587,13 @@ WHERE id = ${inbound_id};
 UPDATE inbounds
 SET stream_settings = json_set(
   stream_settings,
-  '$.tlsSettings.serverName', '${esc_domain}',
+  '$.tlsSettings.serverName', '${esc_keep_server}',
   '$.tlsSettings.certificates[0].certificateFile', '${esc_cert_file}',
   '$.tlsSettings.certificates[0].keyFile', '${esc_key_file}'
 )
 WHERE id = ${inbound_id};
 "
-            echo "[INBOUND-CERT] Fallback inbound id=${inbound_id}: missing cert -> ${target_domain} (${target_cert_file})"
+            echo "[INBOUND-CERT] Linked inbound id=${inbound_id} (${keep_server}) to target cert: ${target_cert_file}"
         else
             # Apply fallback self-signed cert if current file is missing
             if [ ! -f "$fallback_cert" ] || [ ! -f "$fallback_key" ]; then
@@ -753,6 +754,7 @@ WHERE enable = 1
 
     # Automatically bind routed TCP inbounds to 127.0.0.1 to hide backend ports from port scanners
     # (Direct protocols like Shadowsocks, Hysteria, WireGuard, Socks, mKCP, raw TCP must listen publicly on 0.0.0.0)
+    # Never bind to 127.0.0.1 if host for this inbound is disabled (is_disabled = 1) in hosts table
     case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
         true|TRUE|1|yes|YES|on|ON)
             sqlite_db "
@@ -765,7 +767,10 @@ WHERE enable = 1
     json_extract(stream_settings, '$.security') IN ('reality', 'tls')
     OR json_extract(stream_settings, '$.network') IN ('xhttp', 'splithttp', 'ws', 'upgrade', 'httpupgrade', 'grpc')
   )
-  AND (listen = '' OR listen = '0.0.0.0' OR listen IS NULL);
+  AND (listen = '' OR listen = '0.0.0.0' OR listen IS NULL)
+  AND id NOT IN (
+    SELECT inbound_id FROM hosts WHERE is_disabled = 1
+  );
 
 UPDATE inbounds
 SET listen = '0.0.0.0'
@@ -777,6 +782,9 @@ WHERE enable = 1
       json_extract(stream_settings, '$.network') = 'tcp'
       AND (json_extract(stream_settings, '$.security') = 'none' OR json_extract(stream_settings, '$.security') IS NULL OR json_extract(stream_settings, '$.security') = '')
     )
+    OR id IN (
+      SELECT inbound_id FROM hosts WHERE is_disabled = 1
+    )
   )
   AND listen = '127.0.0.1';
 " 2>/dev/null || true
@@ -784,6 +792,7 @@ WHERE enable = 1
     esac
 
     # 4. Generate HAProxy configuration from active inbounds (TCP TLS and Reality only)
+    # Exclude inbounds whose host is disabled (is_disabled = 1) in hosts table
     rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, stream_settings
 FROM inbounds
@@ -792,6 +801,9 @@ WHERE enable = 1
   AND json_valid(stream_settings)
   AND json_extract(stream_settings, '$.network') != 'kcp'
   AND json_extract(stream_settings, '$.security') IN ('reality', 'tls')
+  AND id NOT IN (
+    SELECT inbound_id FROM hosts WHERE is_disabled = 1
+  )
 ORDER BY id ASC;
 " 2>/dev/null || true)
 
@@ -833,23 +845,40 @@ ORDER BY id ASC;
                 clean_snis="$target_domain"
             fi
 
+            in_alpn=$(echo "$stream" | jq -r '(.tlsSettings.alpn // .realitySettings.alpn // [])[]?' 2>/dev/null | tr '\n' ' ')
+            has_h2=0
+            if echo "$in_alpn" | grep -qw 'h2'; then
+                has_h2=1
+            fi
+
             unique_snis=""
             for s in $clean_snis; do
                 if grep -q -x "$s" "$tmp_parts.seen" 2>/dev/null; then
-                    echo "[HAPROXY] Duplicate SNI '${s}' already routed, skipping for id=${id}"
-                    continue
+                    if [ "$has_h2" -eq 1 ]; then
+                        echo "[HAPROXY] Multiplexing SNI '${s}' via ALPN h2 for inbound id=${id}"
+                        unique_snis="$unique_snis $s"
+                    else
+                        echo "[HAPROXY-WARN] Duplicate SNI '${s}' already routed to another inbound, skipping for id=${id}"
+                        continue
+                    fi
+                else
+                    echo "$s" >> "$tmp_parts.seen"
+                    unique_snis="$unique_snis $s"
                 fi
-                echo "$s" >> "$tmp_parts.seen"
-                unique_snis="$unique_snis $s"
             done
 
             if [ -n "$unique_snis" ]; then
                 acl_name="is_in_${id}"
                 bk_name="bk_in_${id}"
                 for s in $unique_snis; do
-                    echo "RULE:    acl ${acl_name} req_ssl_sni -i ${s}" >> "$tmp_parts"
+                    echo "ACL:    acl ${acl_name} req_ssl_sni -i ${s}" >> "$tmp_parts"
                 done
-                echo "RULE:    use_backend ${bk_name} if ${acl_name}" >> "$tmp_parts"
+                if [ "$has_h2" -eq 1 ]; then
+                    echo "ACL:    acl ${acl_name}_h2 req.ssl_alpn -m sub h2" >> "$tmp_parts"
+                    echo "PRIORITY_RULE:    use_backend ${bk_name} if ${acl_name} ${acl_name}_h2" >> "$tmp_parts"
+                else
+                    echo "RULE:    use_backend ${bk_name} if ${acl_name}" >> "$tmp_parts"
+                fi
                 echo "BACKEND:${bk_name}|${port}" >> "$tmp_parts"
             fi
         done
@@ -890,6 +919,8 @@ frontend fe_tls_in
 EOF_HAPROXY_HEAD
 
         # SNI Routing for 3x-ui inbounds (Reality SelfSteal and custom SNIs take precedence)
+        grep "^ACL:" "$tmp_parts" 2>/dev/null | sed 's/^ACL://' >> "$tmp_cfg" || true
+        grep "^PRIORITY_RULE:" "$tmp_parts" 2>/dev/null | sed 's/^PRIORITY_RULE://' >> "$tmp_cfg" || true
         grep "^RULE:" "$tmp_parts" 2>/dev/null | sed 's/^RULE://' >> "$tmp_cfg" || true
 
         if [ "$selfsteal_enabled" -eq 1 ]; then
@@ -1189,11 +1220,12 @@ ORDER BY id ASC;
             esc_path=$(sqlite_escape "$in_path")
             esc_host=$(sqlite_escape "$in_host")
 
-            existing_host=$(sqlite_db -separator '|' "SELECT id, address, port FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
+            existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
                 host_id=$(echo "$existing_host" | cut -d'|' -f1)
                 curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
                 curr_port=$(echo "$existing_host" | cut -d'|' -f3)
+                curr_dis=$(echo "$existing_host" | cut -d'|' -f4)
 
                 if [ -n "$XUI_HAPROXY_DOMAIN" ]; then
                     host_addr="$XUI_HAPROXY_DOMAIN"
@@ -1212,7 +1244,9 @@ ORDER BY id ASC;
                     esac
                 fi
 
-                if [ "$proto" = "vless" -o "$proto" = "vmess" -o "$proto" = "trojan" ] && [ "$net" != "kcp" ] && [ "$force_all_443" -eq 1 ]; then
+                if [ "$curr_dis" = "1" ]; then
+                    host_port="$port"
+                elif [ "$proto" = "vless" -o "$proto" = "vmess" -o "$proto" = "trojan" ] && [ "$net" != "kcp" ] && [ "$force_all_443" -eq 1 ]; then
                     host_port=443
                 elif [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$force_all_443" -eq 0 ]; then
                     host_port="$curr_port"
@@ -1669,18 +1703,12 @@ else
 fi
 
 
-# Resolve any collision between subPort and existing inbound ports
+# Check if subPort conflicts with an active inbound port
 sub_port_val=$(get_setting_value "subPort")
 if [ -n "$sub_port_val" ] && [ "$sub_port_val" -gt 0 ] 2>/dev/null; then
     conflicting_inbound=$(sqlite_db "SELECT id || ' (' || tag || ')' FROM inbounds WHERE enable = 1 AND port = ${sub_port_val} LIMIT 1;" 2>/dev/null || echo "")
     if [ -n "$conflicting_inbound" ]; then
-        echo "[WARN] Subscription port ${sub_port_val} conflicts with inbound ${conflicting_inbound}"
-        new_sub_port=$((sub_port_val + 1))
-        while [ "$(sqlite_db "SELECT count(*) FROM inbounds WHERE port = ${new_sub_port};" 2>/dev/null || echo "1")" -gt 0 ]; do
-            new_sub_port=$((new_sub_port + 1))
-        done
-        set_always "subPort" "$new_sub_port"
-        echo "[AUTO-FIX] Shifted subPort to ${new_sub_port} to prevent Xray port collision"
+        echo "[WARN] Subscription port ${sub_port_val} conflicts with inbound ${conflicting_inbound}. Please set a dedicated subPort in panel settings to avoid collision."
     fi
 fi
 

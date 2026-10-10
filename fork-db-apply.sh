@@ -30,8 +30,8 @@ fi
 
 now=$(date +%s 2>/dev/null || echo 0)
 last_run=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
-if [ "$force_mode" -eq 0 ] && [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 5 ]; then
-    exit 0
+if [ "$force_mode" -eq 0 ] && [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 3 ]; then
+    sleep $((3 - (now - last_run)))
 fi
 
 calc_sig() {
