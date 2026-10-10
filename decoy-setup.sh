@@ -215,6 +215,87 @@ generate_nginx_conf() {
         nginx_http2_line=""
     fi
 
+    # Dynamically extract all web-proxied inbounds (ws, upgrade, xhttp, splithttp, grpc, tcp-http) with security=none
+    dynamic_proxy_locations=""
+    if [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        db_dyn_rows=$(sqlite3 /etc/x-ui/x-ui.db "
+SELECT id, port, stream_settings FROM inbounds
+WHERE enable = 1
+  AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.network') IN ('ws', 'upgrade', 'httpupgrade', 'xhttp', 'splithttp', 'grpc', 'tcp')
+  AND (json_extract(stream_settings, '$.security') = 'none' OR json_extract(stream_settings, '$.security') IS NULL OR json_extract(stream_settings, '$.security') = '');
+" 2>/dev/null || true)
+        if [ -n "$db_dyn_rows" ]; then
+            seen_loc_paths=""
+            while IFS='|' read -r d_id d_port d_stream; do
+                [ -n "$d_id" ] || continue
+                d_net=$(echo "$d_stream" | jq -r '.network // "tcp"' 2>/dev/null || echo "tcp")
+                d_path=""
+                case "$d_net" in
+                    ws)
+                        d_path=$(echo "$d_stream" | jq -r '.wsSettings.path // ""' 2>/dev/null || echo "")
+                        ;;
+                    upgrade|httpupgrade)
+                        d_path=$(echo "$d_stream" | jq -r '.httpupgradeSettings.path // .upgradeSettings.path // ""' 2>/dev/null || echo "")
+                        ;;
+                    xhttp)
+                        d_path=$(echo "$d_stream" | jq -r '.xhttpSettings.path // ""' 2>/dev/null || echo "")
+                        ;;
+                    splithttp)
+                        d_path=$(echo "$d_stream" | jq -r '.splithttpSettings.path // ""' 2>/dev/null || echo "")
+                        ;;
+                    grpc)
+                        d_path=$(echo "$d_stream" | jq -r '.grpcSettings.serviceName // ""' 2>/dev/null || echo "")
+                        ;;
+                    tcp)
+                        tcp_hdr=$(echo "$d_stream" | jq -r '.tcpSettings.header.type // ""' 2>/dev/null || echo "")
+                        if [ "$tcp_hdr" = "http" ]; then
+                            d_path=$(echo "$d_stream" | jq -r '.tcpSettings.header.request.path[0]? // ""' 2>/dev/null || echo "")
+                        fi
+                        ;;
+                esac
+                clean_path=$(echo "$d_path" | cut -d'?' -f1 | tr -d ' ')
+                case "$clean_path" in
+                    ""|"/"|"\\") continue ;;
+                    /*) ;;
+                    *) clean_path="/${clean_path}" ;;
+                esac
+                if echo "$seen_loc_paths" | grep -q -x "$clean_path" 2>/dev/null; then
+                    continue
+                fi
+                seen_loc_paths="${seen_loc_paths}
+${clean_path}"
+
+                if [ "$d_net" = "grpc" ]; then
+                    dynamic_proxy_locations="${dynamic_proxy_locations}
+        location ${clean_path} {
+            grpc_pass grpc://127.0.0.1:${d_port};
+            grpc_read_timeout 3600s;
+            grpc_send_timeout 3600s;
+            grpc_set_header Host \$host;
+            grpc_set_header X-Real-IP \$remote_addr;
+        }"
+                else
+                    dynamic_proxy_locations="${dynamic_proxy_locations}
+        location ${clean_path} {
+            proxy_pass http://127.0.0.1:${d_port};
+            proxy_http_version 1.1;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            client_max_body_size 0;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }"
+                fi
+            done <<< "$db_dyn_rows"
+        fi
+    fi
+
     extra_servers=""
     for live_dir in /etc/letsencrypt/live/*; do
         [ -d "$live_dir" ] || continue
@@ -225,7 +306,9 @@ generate_nginx_conf() {
         c_cert="${live_dir}/fullchain.pem"
         c_key="${live_dir}/privkey.pem"
         if [ -f "$c_cert" ] && [ -f "$c_key" ] && [ "$c_cert" != "$cert" ]; then
-            web_proxy_loc="        location / {
+            web_proxy_loc="${dynamic_proxy_locations}
+
+        location / {
             try_files \$uri \$uri/ \$uri.html /index.html =404;
         }"
             # Проверяем, настроен ли Telegram WEB Proxy на этот домен
@@ -311,6 +394,7 @@ http {
     server_tokens off;
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
+    client_max_body_size 0;
 
     map \$http_upgrade \$connection_upgrade {
         default upgrade;
@@ -336,6 +420,9 @@ http {
 
         root ${PUBLIC_DIR};
         index index.html;
+
+        # Dynamic Inbound proxy locations (WebSocket / xHTTP / SplitHTTP)
+${dynamic_proxy_locations}
 
         location / {
             try_files \$uri \$uri/ \$uri.html /index.html =404;

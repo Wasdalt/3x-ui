@@ -35,6 +35,11 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+# Secure sensitive credentials and keys
+chmod 600 /etc/x-ui/install-result.env 2>/dev/null || true
+chmod 600 /etc/x-ui/fallback-inbound.key 2>/dev/null || true
+chmod 600 /etc/x-ui/fallback-web.key 2>/dev/null || true
+
 if [ ! -f "$DB_PATH" ]; then
     echo "Database not found, skipping configuration"
     exit 0
@@ -664,7 +669,7 @@ WHERE key = 'xrayTemplateConfig'
 " >/dev/null 2>&1 || true
 
     selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
-    inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol != 'hysteria';" 2>/dev/null || echo "")
+    inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol NOT IN ('hysteria', 'hysteria2', 'tuic', 'wireguard') AND (stream_settings IS NULL OR json_extract(stream_settings, '$.network') != 'kcp');" 2>/dev/null || echo "")
     if [ -n "$inbounds_443" ]; then
         shift_port=10443
         for i_id in $inbounds_443; do
@@ -713,6 +718,8 @@ WHERE enable = 1
         done
     fi
 
+
+
     # Fix Vision TCP TLS inbounds having invalid h2/h3 ALPN
     sqlite_db "
 UPDATE inbounds
@@ -745,25 +752,46 @@ WHERE enable = 1
 " 2>/dev/null || true
 
     # Automatically bind routed TCP inbounds to 127.0.0.1 to hide backend ports from port scanners
+    # (Direct protocols like Shadowsocks, Hysteria, WireGuard, Socks, mKCP, raw TCP must listen publicly on 0.0.0.0)
     case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
         true|TRUE|1|yes|YES|on|ON)
             sqlite_db "
 UPDATE inbounds
 SET listen = '127.0.0.1'
 WHERE enable = 1
-  AND protocol != 'hysteria'
+  AND protocol NOT IN ('mtproto', 'mixed', 'socks', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'wireguard')
+  AND (json_extract(stream_settings, '$.network') IS NULL OR json_extract(stream_settings, '$.network') != 'kcp')
+  AND (
+    json_extract(stream_settings, '$.security') IN ('reality', 'tls')
+    OR json_extract(stream_settings, '$.network') IN ('xhttp', 'splithttp', 'ws', 'upgrade', 'httpupgrade', 'grpc')
+  )
   AND (listen = '' OR listen = '0.0.0.0' OR listen IS NULL);
+
+UPDATE inbounds
+SET listen = '0.0.0.0'
+WHERE enable = 1
+  AND (
+    protocol IN ('mtproto', 'mixed', 'socks', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'wireguard')
+    OR json_extract(stream_settings, '$.network') = 'kcp'
+    OR (
+      json_extract(stream_settings, '$.network') = 'tcp'
+      AND (json_extract(stream_settings, '$.security') = 'none' OR json_extract(stream_settings, '$.security') IS NULL OR json_extract(stream_settings, '$.security') = '')
+    )
+  )
+  AND listen = '127.0.0.1';
 " 2>/dev/null || true
             ;;
     esac
 
-    # 4. Generate HAProxy configuration from active inbounds
+    # 4. Generate HAProxy configuration from active inbounds (TCP TLS and Reality only)
     rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, stream_settings
 FROM inbounds
 WHERE enable = 1
-  AND protocol NOT IN ('mtproto', 'mixed', 'hysteria')
+  AND protocol NOT IN ('mtproto', 'mixed', 'socks', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'wireguard')
   AND json_valid(stream_settings)
+  AND json_extract(stream_settings, '$.network') != 'kcp'
+  AND json_extract(stream_settings, '$.security') IN ('reality', 'tls')
 ORDER BY id ASC;
 " 2>/dev/null || true)
 
@@ -805,16 +833,27 @@ ORDER BY id ASC;
                 clean_snis="$target_domain"
             fi
 
-            if [ -n "$clean_snis" ]; then
+            unique_snis=""
+            for s in $clean_snis; do
+                if grep -q -x "$s" "$tmp_parts.seen" 2>/dev/null; then
+                    echo "[HAPROXY] Duplicate SNI '${s}' already routed, skipping for id=${id}"
+                    continue
+                fi
+                echo "$s" >> "$tmp_parts.seen"
+                unique_snis="$unique_snis $s"
+            done
+
+            if [ -n "$unique_snis" ]; then
                 acl_name="is_in_${id}"
                 bk_name="bk_in_${id}"
-                for s in $clean_snis; do
+                for s in $unique_snis; do
                     echo "RULE:    acl ${acl_name} req_ssl_sni -i ${s}" >> "$tmp_parts"
                 done
                 echo "RULE:    use_backend ${bk_name} if ${acl_name}" >> "$tmp_parts"
                 echo "BACKEND:${bk_name}|${port}" >> "$tmp_parts"
             fi
         done
+        rm -f "$tmp_parts.seen" 2>/dev/null || true
     fi
 
         cat << EOF_HAPROXY_HEAD > "$tmp_cfg"
@@ -997,33 +1036,158 @@ EOF_BK_CERTBOT
         false|FALSE|0|no|NO) force_all_443=0 ;;
     esac
 
-    # Ensure each active inbound has an entry in hosts pointing to target_domain
-    if [ -n "$rows" ]; then
-        order=1
-        printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
-            [ -n "$id" ] || continue
-            sec=$(echo "$stream" | jq -r '.security // "same"' 2>/dev/null || echo "same")
-            sni=""
+    # Ensure all active inbounds have accurate, synchronized host entries for subscriptions
+    all_inbounds=$(sqlite_db -separator '|' "
+SELECT id, port, remark, protocol, stream_settings
+FROM inbounds
+WHERE enable = 1
+ORDER BY id ASC;
+" 2>/dev/null || true)
 
-            if [ "$sec" = "reality" ]; then
-                sni=$(echo "$stream" | jq -r '.realitySettings.serverNames[0] // ""' 2>/dev/null || echo "")
-            elif [ "$sec" = "tls" ]; then
-                sni=$(echo "$stream" | jq -r '.tlsSettings.serverName // ""' 2>/dev/null || echo "")
-            fi
-            case "$sni" in
-                ""|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
-                    sni="$target_domain"
+    if [ -n "$all_inbounds" ]; then
+        order=1
+        printf "%s\n" "$all_inbounds" | while IFS='|' read -r id port remark proto stream; do
+            [ -n "$id" ] || continue
+            
+            # Transport network (tcp, ws, xhttp, splithttp, grpc, http, upgrade)
+            net=$(echo "$stream" | jq -r '.network // "tcp"' 2>/dev/null || echo "tcp")
+            
+            # Security (reality, tls, none)
+            sec=$(echo "$stream" | jq -r '.security // "none"' 2>/dev/null || echo "none")
+            
+            # 1. Path & Host Header extraction depending on network transport:
+            in_path=""
+            in_host=""
+            case "$net" in
+                ws)
+                    in_path=$(echo "$stream" | jq -r '.wsSettings.path // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.wsSettings.headers.Host // .wsSettings.headers.host // ""' 2>/dev/null || echo "")
+                    ;;
+                upgrade|httpupgrade)
+                    in_path=$(echo "$stream" | jq -r '.httpupgradeSettings.path // .upgradeSettings.path // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.httpupgradeSettings.host // .upgradeSettings.host // ""' 2>/dev/null || echo "")
+                    ;;
+                xhttp)
+                    in_path=$(echo "$stream" | jq -r '.xhttpSettings.path // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.xhttpSettings.host // ""' 2>/dev/null || echo "")
+                    ;;
+                splithttp)
+                    in_path=$(echo "$stream" | jq -r '.splithttpSettings.path // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.splithttpSettings.host // ""' 2>/dev/null || echo "")
+                    ;;
+                grpc)
+                    in_path=$(echo "$stream" | jq -r '.grpcSettings.serviceName // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.grpcSettings.authority // ""' 2>/dev/null || echo "")
+                    ;;
+                http|h2)
+                    in_path=$(echo "$stream" | jq -r '.httpSettings.path // ""' 2>/dev/null || echo "")
+                    in_host=$(echo "$stream" | jq -r '.httpSettings.host[0]? // ""' 2>/dev/null || echo "")
+                    ;;
+                tcp)
+                    tcp_type=$(echo "$stream" | jq -r '.tcpSettings.header.type // "none"' 2>/dev/null || echo "none")
+                    if [ "$tcp_type" = "http" ]; then
+                        in_path=$(echo "$stream" | jq -r '.tcpSettings.header.request.path[0]? // "/"' 2>/dev/null || echo "/")
+                        in_host=$(echo "$stream" | jq -r '.tcpSettings.header.request.headers.Host[0]? // ""' 2>/dev/null || echo "")
+                    fi
                     ;;
             esac
 
-            esc_remark=$(sqlite_escape "$remark")
-            esc_sni=$(sqlite_escape "$sni")
-            esc_sec=$(sqlite_escape "$sec")
+            # 2. SNI extraction depending on security type:
+            sni=""
+            case "$sec" in
+                reality)
+                    sni=$(echo "$stream" | jq -r '.realitySettings.serverNames[0] // ""' 2>/dev/null || echo "")
+                    if [ -z "$sni" ]; then
+                        sni=$(echo "$stream" | jq -r '.realitySettings.target // ""' 2>/dev/null | cut -d: -f1 || echo "")
+                    fi
+                    ;;
+                tls)
+                    sni=$(echo "$stream" | jq -r '.tlsSettings.serverName // ""' 2>/dev/null || echo "")
+                    ;;
+                none)
+                    [ -n "$in_host" ] && sni="$in_host"
+                    ;;
+            esac
+            case "$sni" in
+                ""|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                    [ "$sec" != "none" ] && sni="$target_domain"
+                    ;;
+            esac
 
-            target_port=443
+            # 3. Fingerprint extraction:
+            fp=""
+            case "$sec" in
+                reality)
+                    fp=$(echo "$stream" | jq -r '.realitySettings.fingerprint // ""' 2>/dev/null || echo "")
+                    ;;
+                tls)
+                    fp=$(echo "$stream" | jq -r '.tlsSettings.fingerprint // ""' 2>/dev/null || echo "")
+                    ;;
+            esac
+            if [ "$sec" = "reality" ] || [ "$sec" = "tls" ]; then
+                [ -z "$fp" ] || [ "$fp" = "null" ] || [ "$fp" = "none" ] && fp="randomized"
+            else
+                fp=""
+            fi
+
+            # 4. ALPN extraction:
+            alpn="[]"
+            case "$sec" in
+                tls)
+                    alpn=$(echo "$stream" | jq -c '.tlsSettings.alpn // []' 2>/dev/null || echo "[]")
+                    ;;
+                reality)
+                    alpn=$(echo "$stream" | jq -c '.realitySettings.alpn // []' 2>/dev/null || echo "[]")
+                    ;;
+            esac
+            [ -z "$alpn" ] || [ "$alpn" = "null" ] && alpn="[]"
+
+            # 5. Determine target port and host security based on protocol, transport and security:
+            case "$proto" in
+                hysteria|hysteria2|tuic)
+                    target_port="$port"
+                    host_sec="tls"
+                    [ -z "$sni" ] && sni="$target_domain"
+                    ;;
+                wireguard|shadowsocks|mixed|socks|mtproto)
+                    target_port="$port"
+                    host_sec="none"
+                    sni=""
+                    fp=""
+                    alpn="[]"
+                    ;;
+                vless|vmess|trojan)
+                    if [ "$net" = "kcp" ]; then
+                        target_port="$port"
+                        host_sec="$sec"
+                    elif [ "$sec" = "reality" ] || [ "$sec" = "tls" ]; then
+                        target_port=443
+                        host_sec="$sec"
+                    elif [ "$net" = "ws" ] || [ "$net" = "xhttp" ] || [ "$net" = "splithttp" ] || [ "$net" = "grpc" ] || [ "$net" = "upgrade" ] || [ "$net" = "httpupgrade" ]; then
+                        # Reverse-proxied via Nginx Decoy on port 443 with TLS
+                        target_port=443
+                        host_sec="tls"
+                        [ -z "$sni" ] && sni="$target_domain"
+                    else
+                        # Plain unencrypted TCP inbound
+                        target_port="$port"
+                        host_sec="none"
+                    fi
+                    ;;
+                *)
+                    target_port="$port"
+                    host_sec="$sec"
+                    ;;
+            esac
             if [ "$force_all_443" -eq 0 ] && [ "$sec" = "reality" ]; then
                 target_port="$port"
             fi
+
+            esc_remark=$(sqlite_escape "$remark")
+            esc_sni=$(sqlite_escape "$sni")
+            esc_sec=$(sqlite_escape "$host_sec")
+            esc_path=$(sqlite_escape "$in_path")
+            esc_host=$(sqlite_escape "$in_host")
 
             existing_host=$(sqlite_db -separator '|' "SELECT id, address, port FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
@@ -1048,17 +1212,12 @@ EOF_BK_CERTBOT
                     esac
                 fi
 
-                if [ "$force_all_443" -eq 1 ]; then
+                if [ "$proto" = "vless" -o "$proto" = "vmess" -o "$proto" = "trojan" ] && [ "$net" != "kcp" ] && [ "$force_all_443" -eq 1 ]; then
                     host_port=443
-                elif [ "$sec" = "reality" ]; then
-                    if [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$curr_port" != "443" ]; then
-                        host_port="$curr_port"
-                    else
-                        host_port="$port"
-                    fi
+                elif [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$force_all_443" -eq 0 ]; then
+                    host_port="$curr_port"
                 else
-                    host_port="${curr_port:-443}"
-                    [ -n "$host_port" ] && [ "$host_port" -gt 0 ] 2>/dev/null || host_port=443
+                    host_port="$target_port"
                 fi
 
                 esc_host_addr=$(sqlite_escape "$host_addr")
@@ -1069,6 +1228,10 @@ SET address = '${esc_host_addr}',
     sni = '${esc_sni}',
     security = '${esc_sec}',
     remark = '${esc_remark}',
+    fingerprint = '${fp}',
+    alpn = '${alpn}',
+    path = '${esc_path}',
+    host_header = '${esc_host}',
     updated_at = ${now_ms}
 WHERE id = ${host_id};
 " 2>/dev/null || true
@@ -1093,8 +1256,8 @@ INSERT INTO hosts (
 ) VALUES (
     '${group_id}', ${id}, ${order}, '${esc_remark}', '',
     0, 0, '', '${esc_host_addr}', ${target_port},
-    '${esc_sec}', '${esc_sni}', '', '', '[]',
-    '', 0, 0,
+    '${esc_sec}', '${esc_sni}', '${esc_host}', '${esc_path}', '${alpn}',
+    '${fp}', 0, 0,
     '[]', '', 0,
     '', '', '', '',
     '', '', '', 0,
@@ -1259,16 +1422,8 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         SUB_KEY_FILE="$KEY_FILE"
     fi
 
-    # Auto-issue SSL certificates for all candidate domains from DB and .env
+    # Auto-issue SSL certificates for all candidate domains from DB and .env (excluding Reality SNI targets)
     if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
-        db_reality_doms=$(sqlite_db "
-SELECT json_extract(stream_settings, '$.realitySettings.serverNames[0]')
-FROM inbounds
-WHERE enable = 1
-  AND json_valid(stream_settings)
-  AND json_extract(stream_settings, '$.security') = 'reality';
-" 2>/dev/null || true)
-
         db_tls_doms=$(sqlite_db "
 SELECT json_extract(stream_settings, '$.tlsSettings.serverName')
 FROM inbounds
@@ -1285,7 +1440,7 @@ SELECT value FROM settings WHERE key IN ('webDomain', 'subDomain') AND value != 
 SELECT address FROM hosts WHERE address != '' AND address NOT LIKE '127.%' AND address NOT LIKE '0.0.%';
 " 2>/dev/null || true)
 
-        all_candidate_domains=$(echo "$db_reality_doms $db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-}" | tr ' ' '\n' | sort -u)
+        all_candidate_domains=$(echo "$db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-}" | tr ' ' '\n' | sort -u)
 
         decoy_updated=0
         for d in $all_candidate_domains; do
@@ -1606,6 +1761,9 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
                 [ -n "$XUI_XRAY_ACCESS_LOG" ] && jq --arg val "$XUI_XRAY_ACCESS_LOG" '.log.access = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
                 [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
                 [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+
+                # Remove anti-abuse blocking rules as requested by user
+                jq '.routing.rules = [.routing.rules[]? | select((.port? != "25,465,587") and (.port? != "23,135,137,138,139,445"))]' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
 
                 jq . "$TMP_JSON" > "$XRAY_CONFIG"
 

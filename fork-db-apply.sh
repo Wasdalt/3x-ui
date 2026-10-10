@@ -19,9 +19,18 @@ DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 [ -f "$DB_PATH" ] || exit 0
 command -v sqlite3 >/dev/null 2>&1 || exit 0
 
+force_mode=0
+if [ "$1" = "--force" ] || [ "$1" = "-f" ]; then
+    force_mode=1
+fi
+
+if [ -x "${XUI_DIR}/fork-sync.sh" ]; then
+    "${XUI_DIR}/fork-sync.sh" || true
+fi
+
 now=$(date +%s 2>/dev/null || echo 0)
 last_run=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
-if [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 5 ]; then
+if [ "$force_mode" -eq 0 ] && [ "$now" -gt 0 ] && [ "$last_run" -gt 0 ] && [ $((now - last_run)) -lt 5 ]; then
     exit 0
 fi
 
@@ -51,7 +60,7 @@ SELECT key, value FROM settings WHERE key IN (
 current_sig=$(calc_sig)
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
 
-if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
+if [ "$force_mode" -eq 0 ] && [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
     exit 0
 fi
 echo "$now" > "$DEBOUNCE_FILE" 2>/dev/null || true
@@ -62,7 +71,7 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 last_sig=$(cat "$SIG_FILE" 2>/dev/null || echo "")
-if [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
+if [ "$force_mode" -eq 0 ] && [ -n "$current_sig" ] && [ -n "$last_sig" ] && [ "$current_sig" = "$last_sig" ]; then
     exit 0
 fi
 
