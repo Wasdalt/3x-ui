@@ -1184,6 +1184,8 @@ ORDER BY id ASC;
             [ -z "$alpn" ] || [ "$alpn" = "null" ] && alpn="[]"
             if [ "$alpn" = "[]" ] && [ "$has_vision" -eq 1 ]; then
                 alpn='["http/1.1"]'
+            elif [ "$alpn" = "[]" ] && [ "$net" = "grpc" ]; then
+                alpn='["h2"]'
             fi
 
             # 5. Determine target port and host security based on protocol, transport and security:
@@ -1488,6 +1490,25 @@ SELECT address FROM hosts WHERE address != '' AND address NOT LIKE '127.%' AND a
 " 2>/dev/null || true)
 
         all_candidate_domains=$(echo "$db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-}" | tr ' ' '\n' | sort -u)
+
+        # Include standard role subdomains (edge, ingest, dash, probe) if base domain is known
+        extra_subdomains=""
+        for base_dom in $all_candidate_domains; do
+            case "$base_dom" in
+                edge.*|ingest.*|dash.*|probe.*)
+                    parent_dom=$(echo "$base_dom" | cut -d. -f2-)
+                    if [ -n "$parent_dom" ] && [ "$parent_dom" != "$base_dom" ]; then
+                        extra_subdomains="$extra_subdomains $parent_dom edge.$parent_dom ingest.$parent_dom dash.$parent_dom probe.$parent_dom"
+                    fi
+                    ;;
+                ""|null|localhost|127.0.0.1|*:[0-9]*|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                    ;;
+                *)
+                    extra_subdomains="$extra_subdomains edge.$base_dom ingest.$base_dom dash.$base_dom probe.$base_dom"
+                    ;;
+            esac
+        done
+        all_candidate_domains=$(echo "$all_candidate_domains $extra_subdomains" | tr ' ' '\n' | sort -u)
 
         decoy_updated=0
         for d in $all_candidate_domains; do
