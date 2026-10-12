@@ -808,9 +808,6 @@ WHERE enable = 1
   AND json_valid(stream_settings)
   AND json_extract(stream_settings, '$.network') != 'kcp'
   AND json_extract(stream_settings, '$.security') IN ('reality', 'tls')
-  AND id NOT IN (
-    SELECT inbound_id FROM hosts WHERE is_disabled = 1
-  )
 ORDER BY id ASC;
 " 2>/dev/null || true)
 
@@ -859,11 +856,13 @@ ORDER BY id ASC;
             fi
 
             unique_snis=""
+            is_multiplexed=0
             for s in $clean_snis; do
                 if grep -q -x "$s" "$tmp_parts.seen" 2>/dev/null; then
                     if [ "$has_h2" -eq 1 ]; then
                         echo "[HAPROXY] Multiplexing SNI '${s}' via ALPN h2 for inbound id=${id}"
                         unique_snis="$unique_snis $s"
+                        is_multiplexed=1
                     else
                         echo "[HAPROXY-WARN] Duplicate SNI '${s}' already routed to another inbound, skipping for id=${id}"
                         continue
@@ -880,7 +879,7 @@ ORDER BY id ASC;
                 for s in $unique_snis; do
                     echo "ACL:    acl ${acl_name} req_ssl_sni -i ${s}" >> "$tmp_parts"
                 done
-                if [ "$has_h2" -eq 1 ]; then
+                if [ "$is_multiplexed" -eq 1 ]; then
                     echo "ACL:    acl ${acl_name}_h2 req.ssl_alpn -m sub h2" >> "$tmp_parts"
                     echo "PRIORITY_RULE:    use_backend ${bk_name} if ${acl_name} ${acl_name}_h2" >> "$tmp_parts"
                 else
@@ -1074,6 +1073,23 @@ EOF_BK_CERTBOT
         false|FALSE|0|no|NO) force_all_443=0 ;;
     esac
 
+    hosts_use_ip=0
+    case "${XUI_HOSTS_USE_IP:-true}" in
+        true|TRUE|1|yes|YES) hosts_use_ip=1 ;;
+    esac
+
+    public_server_ip=$(get_public_ip 2>/dev/null || ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | grep -v '^172\.' | head -n 1)
+
+    if [ -n "$XUI_HOSTS_ADDRESS" ]; then
+        def_host_addr="$XUI_HOSTS_ADDRESS"
+    elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
+        def_host_addr="$public_server_ip"
+    elif [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+        def_host_addr="$XUI_HAPROXY_DOMAIN"
+    else
+        def_host_addr="$target_domain"
+    fi
+
     # Ensure all active inbounds have accurate, synchronized host entries for subscriptions
     all_inbounds=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol,
@@ -1242,7 +1258,9 @@ ORDER BY id ASC;
                 curr_port=$(echo "$existing_host" | cut -d'|' -f3)
                 curr_dis=$(echo "$existing_host" | cut -d'|' -f4)
 
-                if [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+                if [ -n "$def_host_addr" ]; then
+                    host_addr="$def_host_addr"
+                elif [ -n "$XUI_HAPROXY_DOMAIN" ]; then
                     host_addr="$XUI_HAPROXY_DOMAIN"
                 else
                     case "$curr_addr" in
@@ -1285,7 +1303,9 @@ SET address = '${esc_host_addr}',
 WHERE id = ${host_id};
 " 2>/dev/null || true
             else
-                if [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
+                if [ -n "$def_host_addr" ]; then
+                    host_addr="$def_host_addr"
+                elif [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
                     host_addr="$sni"
                 else
                     host_addr="$target_domain"
