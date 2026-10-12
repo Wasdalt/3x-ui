@@ -427,7 +427,7 @@ ${clean_path}"
         ssl_prefer_server_ciphers off;
         ssl_session_cache shared:SSL:10m;
         ssl_session_timeout 1d;
-        ssl_session_tickets on;
+        ssl_session_tickets off;
 
         root ${PUBLIC_DIR};
         index index.html;
@@ -498,7 +498,7 @@ http {
         ssl_prefer_server_ciphers off;
         ssl_session_cache shared:SSL:10m;
         ssl_session_timeout 1d;
-        ssl_session_tickets on;
+        ssl_session_tickets off;
 
         root ${PUBLIC_DIR};
         index index.html;
