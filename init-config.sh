@@ -634,13 +634,19 @@ sync_haproxy_and_hosts() {
     target_domain=$1
     haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
 
-    case "${XUI_HAPROXY_ENABLE:-true}" in
-        true|TRUE|1|yes|YES|on|ON) ;;
-        *)
-            echo "[HAPROXY] Disabled via XUI_HAPROXY_ENABLE"
-            return 0
-            ;;
+    haproxy_enabled=1
+    case "${XUI_HAPROXY_ENABLE:-false}" in
+        true|TRUE|1|yes|YES|on|ON) haproxy_enabled=1 ;;
+        *) haproxy_enabled=0 ;;
     esac
+
+    if [ "$haproxy_enabled" -eq 0 ]; then
+        echo "[HAPROXY] Disabled via XUI_HAPROXY_ENABLE=false"
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop haproxy >/dev/null 2>&1 || true
+            systemctl disable haproxy >/dev/null 2>&1 || true
+        fi
+    fi
 
     command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || {
         echo "[HAPROXY] sqlite3 or jq not found, skipping HAProxy synchronization"
@@ -798,9 +804,19 @@ WHERE enable = 1
             ;;
     esac
 
-    # 4. Generate HAProxy configuration from active inbounds (TCP TLS and Reality only)
-    # Exclude inbounds whose host is disabled (is_disabled = 1) in hosts table
-    rows=$(sqlite_db -separator '|' "
+    # SelfSteal Decoy Site integration settings
+    selfsteal_enabled=0
+    case "${XUI_SELFSTEAL_ENABLE:-true}" in
+        true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
+    esac
+
+    selfsteal_domain="${XUI_SELFSTEAL_DOMAIN:-${target_domain}}"
+    selfsteal_port="${XUI_SELFSTEAL_PORT:-10444}"
+
+    if [ "$haproxy_enabled" -eq 1 ]; then
+        # 4. Generate HAProxy configuration from active inbounds (TCP TLS and Reality only)
+        # Exclude inbounds whose host is disabled (is_disabled = 1) in hosts table
+        rows=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol, replace(replace(stream_settings, char(10), ''), char(13), '')
 FROM inbounds
 WHERE enable = 1
@@ -811,17 +827,8 @@ WHERE enable = 1
 ORDER BY id ASC;
 " 2>/dev/null || true)
 
-    tmp_cfg=$(mktemp)
-    tmp_parts=$(mktemp)
-
-    # SelfSteal Decoy Site integration settings
-    selfsteal_enabled=0
-    case "${XUI_SELFSTEAL_ENABLE:-true}" in
-        true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
-    esac
-
-    selfsteal_domain="${XUI_SELFSTEAL_DOMAIN:-${target_domain}}"
-    selfsteal_port="${XUI_SELFSTEAL_PORT:-10444}"
+        tmp_cfg=$(mktemp)
+        tmp_parts=$(mktemp)
 
     if [ -n "$rows" ]; then
         printf "%s\n" "$rows" | while IFS='|' read -r id port remark proto stream; do
@@ -1045,32 +1052,34 @@ EOF_BK_CERTBOT
                 fi
             fi
 
-            # Ensure SelfSteal Decoy service is active if enabled
-            if [ "$selfsteal_enabled" -eq 1 ]; then
-                decoy_script=""
-                if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
-                    decoy_script="${SCRIPT_DIR}/decoy-setup.sh"
-                elif [ -f "/usr/local/x-ui/decoy-setup.sh" ]; then
-                    decoy_script="/usr/local/x-ui/decoy-setup.sh"
-                elif [ -f "/app/decoy-setup.sh" ]; then
-                    decoy_script="/app/decoy-setup.sh"
-                fi
-                if [ -n "$decoy_script" ]; then
-                    echo "[HAPROXY-SELFSTEAL] Applying SelfSteal decoy service (${selfsteal_domain} -> 127.0.0.1:${selfsteal_port})..."
-                    sh "$decoy_script" apply >/dev/null 2>&1 || true
-                fi
-            fi
         fi
 
         rm -f "$tmp_cfg" "$tmp_parts"
+    fi
+
+    # Ensure SelfSteal Decoy service is active if enabled
+    if [ "$selfsteal_enabled" -eq 1 ]; then
+        decoy_script=""
+        if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+            decoy_script="${SCRIPT_DIR}/decoy-setup.sh"
+        elif [ -f "/usr/local/x-ui/decoy-setup.sh" ]; then
+            decoy_script="/usr/local/x-ui/decoy-setup.sh"
+        elif [ -f "/app/decoy-setup.sh" ]; then
+            decoy_script="/app/decoy-setup.sh"
+        fi
+        if [ -n "$decoy_script" ]; then
+            echo "[SELFSTEAL] Applying SelfSteal decoy service (${selfsteal_domain} -> port ${selfsteal_port})..."
+            sh "$decoy_script" apply >/dev/null 2>&1 || true
+        fi
+    fi
 
     # 5. Synchronize hosts table (nodes for subscriptions)
-    echo "[HAPROXY-HOSTS] Synchronizing hosts table for domain: ${target_domain} (port 443)..."
+    echo "[HOSTS] Synchronizing hosts table for domain: ${target_domain}..."
     now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 
-    force_all_443=1
-    case "${XUI_HOSTS_FORCE_443:-true}" in
-        false|FALSE|0|no|NO) force_all_443=0 ;;
+    force_all_443=0
+    case "${XUI_HOSTS_FORCE_443:-false}" in
+        true|TRUE|1|yes|YES) force_all_443=1 ;;
     esac
 
     hosts_use_ip=0
@@ -1222,18 +1231,19 @@ ORDER BY id ASC;
                     if [ "$net" = "kcp" ]; then
                         target_port="$port"
                         host_sec="$sec"
-                    elif [ "$sec" = "reality" ] || [ "$sec" = "tls" ]; then
-                        target_port=443
-                        host_sec="$sec"
                     elif [ "$net" = "ws" ] || [ "$net" = "xhttp" ] || [ "$net" = "splithttp" ] || [ "$net" = "grpc" ] || [ "$net" = "upgrade" ] || [ "$net" = "httpupgrade" ]; then
                         # Reverse-proxied via Nginx Decoy on port 443 with TLS
                         target_port=443
                         host_sec="tls"
                         [ -z "$sni" ] && sni="$target_domain"
+                    elif [ "$force_all_443" -eq 1 ]; then
+                        # Force all to 443 (when HAProxy is enabled)
+                        target_port=443
+                        host_sec="$sec"
                     else
-                        # Plain unencrypted TCP inbound
+                        # Direct port for Reality and direct TCP TLS
                         target_port="$port"
-                        host_sec="none"
+                        host_sec="$sec"
                     fi
                     ;;
                 *)
@@ -1241,15 +1251,18 @@ ORDER BY id ASC;
                     host_sec="$sec"
                     ;;
             esac
-            if [ "$force_all_443" -eq 0 ] && [ "$sec" = "reality" ]; then
-                target_port="$port"
-            fi
 
             esc_remark=$(sqlite_escape "$remark")
             esc_sni=$(sqlite_escape "$sni")
             esc_sec=$(sqlite_escape "$host_sec")
             esc_path=$(sqlite_escape "$in_path")
             esc_host=$(sqlite_escape "$in_host")
+
+            # Determine if SNI belongs to our managed domain
+            sni_is_ours=0
+            case "$sni" in
+                *"${target_domain}"*) sni_is_ours=1 ;;
+            esac
 
             existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
@@ -1262,7 +1275,7 @@ ORDER BY id ASC;
                     host_addr="$XUI_HOSTS_ADDRESS"
                 elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
                     host_addr="$public_server_ip"
-                elif [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
+                elif [ "$sni_is_ours" -eq 1 ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
                     host_addr="$def_host_addr"
@@ -1285,10 +1298,6 @@ ORDER BY id ASC;
 
                 if [ "$curr_dis" = "1" ]; then
                     host_port="$port"
-                elif [ "$proto" = "vless" -o "$proto" = "vmess" -o "$proto" = "trojan" ] && [ "$net" != "kcp" ] && [ "$force_all_443" -eq 1 ]; then
-                    host_port=443
-                elif [ -n "$curr_port" ] && [ "$curr_port" -gt 0 ] && [ "$force_all_443" -eq 0 ]; then
-                    host_port="$curr_port"
                 else
                     host_port="$target_port"
                 fi
@@ -1313,7 +1322,7 @@ WHERE id = ${host_id};
                     host_addr="$XUI_HOSTS_ADDRESS"
                 elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
                     host_addr="$public_server_ip"
-                elif [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
+                elif [ "$sni_is_ours" -eq 1 ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
                     host_addr="$def_host_addr"
@@ -1346,9 +1355,10 @@ INSERT INTO hosts (
             fi
             order=$((order + 1))
         done
-        echo "[HAPROXY-HOSTS] Hosts table synchronized for all active inbounds"
-        # Disable Reality hosts that collide on duplicate SNI with TLS inbounds (which take priority on 443)
-        sqlite_db "
+        echo "[HOSTS] Hosts table synchronized for all active inbounds"
+        # Disable Reality hosts that collide on duplicate SNI with TLS inbounds only when sharing port 443 via HAProxy
+        if [ "$force_all_443" -eq 1 ]; then
+            sqlite_db "
 UPDATE hosts
 SET is_disabled = 1
 WHERE inbound_id IN (
@@ -1359,6 +1369,7 @@ AND sni IN (
     FROM inbounds WHERE json_extract(stream_settings, '$.security') = 'tls'
 );
 " 2>/dev/null || true
+        fi
     fi
 
     # 6. Clean legacy externalProxy from inbounds.stream_settings

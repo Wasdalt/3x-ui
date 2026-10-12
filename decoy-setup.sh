@@ -270,25 +270,45 @@ generate_nginx_conf() {
         mime_include="include /etc/mime.types;"
     fi
 
+    # Detect if Nginx should bind to public port 443
+    is_public_443=0
+    case "${XUI_SELFSTEAL_PUBLIC:-true}" in
+        true|TRUE|1|yes|YES) is_public_443=1 ;;
+    esac
+
     # Detect nginx version for http2 syntax compatibility
-    nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl;"
-    nginx_http2_line=""
     bin_to_check="${nginx_bin:-$(command -v nginx || true)}"
+    nmajor=1
+    nminor=24
     if [ -n "$bin_to_check" ] && [ -x "$bin_to_check" ]; then
         nver=$("$bin_to_check" -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
         nmajor=$(echo "$nver" | cut -d. -f1)
         nminor=$(echo "$nver" | cut -d. -f2)
-        npatch=$(echo "$nver" | cut -d. -f3)
-        if [ "${nmajor:-0}" -gt 1 ] || [ "${nmajor:-0}" -eq 1 -a "${nminor:-0}" -gt 25 ] || [ "${nmajor:-0}" -eq 1 -a "${nminor:-0}" -eq 25 -a "${npatch:-0}" -ge 1 ]; then
+    fi
+
+    use_new_h2=0
+    if [ "${nmajor:-0}" -gt 1 ] || [ "${nmajor:-0}" -eq 1 -a "${nminor:-0}" -gt 25 ]; then
+        use_new_h2=1
+    fi
+
+    if [ "$is_public_443" -eq 1 ] || [ "$SELFSTEAL_PORT" = "443" ]; then
+        if [ "$use_new_h2" -eq 1 ]; then
+            nginx_http2_listen="listen 443 ssl;
+        listen 127.0.0.1:10444 ssl;"
+            nginx_http2_line="http2 on;"
+        else
+            nginx_http2_listen="listen 443 ssl http2;
+        listen 127.0.0.1:10444 ssl http2;"
+            nginx_http2_line=""
+        fi
+    else
+        if [ "$use_new_h2" -eq 1 ]; then
             nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl;"
             nginx_http2_line="http2 on;"
         else
             nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl http2;"
             nginx_http2_line=""
         fi
-    else
-        nginx_http2_listen="listen 127.0.0.1:${SELFSTEAL_PORT} ssl http2;"
-        nginx_http2_line=""
     fi
 
     # Dynamically extract all web-proxied inbounds (ws, upgrade, xhttp, splithttp, grpc, tcp-http) with security=none
@@ -496,6 +516,18 @@ http {
     map \$http_upgrade \$connection_upgrade {
         default upgrade;
         '' close;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+        location /.well-known/acme-challenge/ {
+            root /var/www/html;
+            try_files \$uri =404;
+        }
+        location / {
+            return 301 https://\$host\$request_uri;
+        }
     }
 
     server {
