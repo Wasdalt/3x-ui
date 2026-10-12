@@ -323,6 +323,8 @@ WHERE enable = 1
 " 2>/dev/null || true)
         if [ -n "$db_dyn_rows" ]; then
             seen_loc_paths=""
+            tmp_dyn=$(mktemp)
+            printf "%s\n" "$db_dyn_rows" > "$tmp_dyn"
             while IFS='|' read -r d_id d_port d_stream; do
                 [ -n "$d_id" ] || continue
                 d_net=$(echo "$d_stream" | jq -r '.network // "tcp"' 2>/dev/null || echo "tcp")
@@ -388,7 +390,8 @@ ${clean_path}"
             proxy_send_timeout 3600s;
         }"
                 fi
-            done <<< "$db_dyn_rows"
+            done < "$tmp_dyn"
+            rm -f "$tmp_dyn"
         fi
     fi
 
