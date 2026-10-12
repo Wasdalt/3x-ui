@@ -654,7 +654,7 @@ sync_haproxy_and_hosts() {
     }
 
     # 1. Resolve target domain for clients / subscriptions
-    if [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+    if [ "$haproxy_enabled" -eq 1 ] && [ -n "$XUI_HAPROXY_DOMAIN" ]; then
         target_domain="$XUI_HAPROXY_DOMAIN"
     fi
     if [ -z "$target_domain" ] || [ "$target_domain" = "127.0.0.1" ]; then
@@ -1260,9 +1260,13 @@ ORDER BY id ASC;
 
             # Determine if SNI belongs to our managed domain
             sni_is_ours=0
-            case "$sni" in
-                *"${target_domain}"*) sni_is_ours=1 ;;
-            esac
+            if [ -n "$sni" ] && [ -f "/etc/letsencrypt/live/${sni}/fullchain.pem" ]; then
+                sni_is_ours=1
+            elif [ -n "$sni" ]; then
+                case "$sni" in
+                    *"${target_domain}"*) sni_is_ours=1 ;;
+                esac
+            fi
 
             existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
@@ -1279,7 +1283,7 @@ ORDER BY id ASC;
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
                     host_addr="$def_host_addr"
-                elif [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+                elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$XUI_HAPROXY_DOMAIN" ]; then
                     host_addr="$XUI_HAPROXY_DOMAIN"
                 else
                     case "$curr_addr" in
@@ -1326,6 +1330,8 @@ WHERE id = ${host_id};
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
                     host_addr="$def_host_addr"
+                elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$XUI_HAPROXY_DOMAIN" ]; then
+                    host_addr="$XUI_HAPROXY_DOMAIN"
                 else
                     host_addr="$target_domain"
                 fi
