@@ -1074,7 +1074,7 @@ EOF_BK_CERTBOT
     esac
 
     hosts_use_ip=0
-    case "${XUI_HOSTS_USE_IP:-true}" in
+    case "${XUI_HOSTS_USE_IP:-false}" in
         true|TRUE|1|yes|YES) hosts_use_ip=1 ;;
     esac
 
@@ -1258,7 +1258,13 @@ ORDER BY id ASC;
                 curr_port=$(echo "$existing_host" | cut -d'|' -f3)
                 curr_dis=$(echo "$existing_host" | cut -d'|' -f4)
 
-                if [ -n "$def_host_addr" ]; then
+                if [ -n "$XUI_HOSTS_ADDRESS" ]; then
+                    host_addr="$XUI_HOSTS_ADDRESS"
+                elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
+                    host_addr="$public_server_ip"
+                elif [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
+                    host_addr="$sni"
+                elif [ -n "$def_host_addr" ]; then
                     host_addr="$def_host_addr"
                 elif [ -n "$XUI_HAPROXY_DOMAIN" ]; then
                     host_addr="$XUI_HAPROXY_DOMAIN"
@@ -1303,10 +1309,14 @@ SET address = '${esc_host_addr}',
 WHERE id = ${host_id};
 " 2>/dev/null || true
             else
-                if [ -n "$def_host_addr" ]; then
-                    host_addr="$def_host_addr"
-                elif [ "$sec" = "tls" ] && [ -n "$sni" ] && [ "$sni" != "$target_domain" ]; then
+                if [ -n "$XUI_HOSTS_ADDRESS" ]; then
+                    host_addr="$XUI_HOSTS_ADDRESS"
+                elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
+                    host_addr="$public_server_ip"
+                elif [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
                     host_addr="$sni"
+                elif [ -n "$def_host_addr" ]; then
+                    host_addr="$def_host_addr"
                 else
                     host_addr="$target_domain"
                 fi
