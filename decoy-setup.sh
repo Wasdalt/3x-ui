@@ -372,6 +372,13 @@ ${clean_path}"
         fi
     fi
 
+    default_sans=""
+    if [ -f "$cert" ] && command -v openssl >/dev/null 2>&1; then
+        default_sans=$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null | grep -oE 'DNS:[^, ]+' | sed 's/DNS://' | tr '\n' ' ' || echo "")
+    fi
+    default_server_names="_ ${default_sans:-$target_domain}"
+    seen_domains="${default_sans:-$target_domain}"
+
     extra_servers=""
     for live_dir in /etc/letsencrypt/live/*; do
         [ -d "$live_dir" ] || continue
@@ -408,7 +415,15 @@ ${clean_path}"
             if command -v openssl >/dev/null 2>&1; then
                 cert_sans=$(openssl x509 -in "$c_cert" -noout -ext subjectAltName 2>/dev/null | grep -oE 'DNS:[^, ]+' | sed 's/DNS://' | tr '\n' ' ' || echo "")
             fi
-            server_names="${cert_sans:-$c_dom}"
+            unique_snis=""
+            for d in ${cert_sans:-$c_dom}; do
+                if ! echo " $seen_domains " | grep -q " $d "; then
+                    seen_domains="$seen_domains $d"
+                    unique_snis="$unique_snis $d"
+                fi
+            done
+            [ -n "$unique_snis" ] || continue
+            server_names="$unique_snis"
 
             extra_servers="${extra_servers}
 
@@ -486,7 +501,7 @@ http {
     server {
         ${nginx_http2_listen}
         ${nginx_http2_line}
-        server_name _ ${target_domain};
+        server_name ${default_server_names};
 
         error_page 497 =301 https://\$host\$request_uri;
 
@@ -694,7 +709,7 @@ case "${1:-status}" in
         switch_template "$2"
         setup_and_start_service
         ;;
-    start|restart|apply)
+    start|restart|apply|install|--install)
         setup_and_start_service
         ;;
     preview)
