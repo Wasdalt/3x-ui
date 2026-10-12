@@ -328,12 +328,18 @@ ${clean_path}"
                 fi
             fi
 
+            cert_sans=""
+            if command -v openssl >/dev/null 2>&1; then
+                cert_sans=$(openssl x509 -in "$c_cert" -noout -ext subjectAltName 2>/dev/null | grep -oE 'DNS:[^, ]+' | sed 's/DNS://' | tr '\n' ' ' || echo "")
+            fi
+            server_names="${cert_sans:-$c_dom}"
+
             extra_servers="${extra_servers}
 
     server {
         ${nginx_http2_listen}
         ${nginx_http2_line}
-        server_name ${c_dom};
+        server_name ${server_names};
 
         error_page 497 =301 https://\$host\$request_uri;
 

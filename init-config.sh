@@ -1471,7 +1471,8 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         SUB_KEY_FILE="$KEY_FILE"
     fi
 
-    # Auto-issue SSL certificates for all candidate domains from DB and .env (excluding Reality SNI targets)
+    # Auto-issue SSL certificates for all candidate domains from DB and .env
+    # (including Reality SelfSteal domains where target points to local decoy)
     if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
         db_tls_doms=$(sqlite_db "
 SELECT json_extract(stream_settings, '$.tlsSettings.serverName')
@@ -1479,6 +1480,36 @@ FROM inbounds
 WHERE enable = 1
   AND json_valid(stream_settings)
   AND json_extract(stream_settings, '$.security') = 'tls';
+" 2>/dev/null || true)
+
+        db_reality_doms=$(sqlite_db "
+SELECT json_extract(value, '$')
+FROM inbounds, json_each(inbounds.stream_settings, '$.realitySettings.serverNames')
+WHERE inbounds.enable = 1
+  AND json_valid(inbounds.stream_settings)
+  AND json_extract(inbounds.stream_settings, '$.security') = 'reality'
+  AND (
+    json_extract(inbounds.stream_settings, '$.realitySettings.target') LIKE '127.0.0.1:%'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.target') LIKE 'localhost:%'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.target') = '127.0.0.1'
+  )
+UNION
+SELECT sni FROM hosts 
+WHERE security = 'reality' 
+  AND sni != '' 
+  AND sni NOT LIKE '127.%' 
+  AND sni NOT LIKE '0.0.%'
+  AND (
+    inbound_id IN (
+      SELECT id FROM inbounds
+      WHERE json_valid(stream_settings)
+        AND (
+          json_extract(stream_settings, '$.realitySettings.target') LIKE '127.0.0.1:%'
+          OR json_extract(stream_settings, '$.realitySettings.target') LIKE 'localhost:%'
+          OR json_extract(stream_settings, '$.realitySettings.target') = '127.0.0.1'
+        )
+    )
+  );
 " 2>/dev/null || true)
 
         db_settings_doms=$(sqlite_db "
@@ -1494,7 +1525,7 @@ SELECT sni FROM hosts WHERE security = 'tls' AND sni != '' AND sni NOT LIKE '127
         # Support XUI_EXTRA_DOMAINS from .env (space- or comma-separated list of arbitrary domains/subdomains)
         env_extra_doms=$(echo "${XUI_EXTRA_DOMAINS:-}" | tr ',' ' ')
 
-        all_candidate_domains=$(echo "$db_tls_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-} $env_extra_doms" | tr ' ' '\n' | sort -u)
+        all_candidate_domains=$(echo "$db_tls_doms $db_reality_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-} $env_extra_doms" | tr ' ' '\n' | sort -u)
 
         decoy_updated=0
         for d in $all_candidate_domains; do
@@ -1812,6 +1843,12 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
 
                 # Remove anti-abuse blocking rules as requested by user
                 jq '.routing.rules = [.routing.rules[]? | select((.port? != "25,465,587") and (.port? != "23,135,137,138,139,445"))]' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+
+                # Ensure balancers don't get stuck in blind roundRobin when outbound is dead; convert to leastPing with direct fallback
+                jq 'if .routing.balancers then .routing.balancers = [.routing.balancers[] | if (.strategy.type == "roundRobin") and (.fallbackTag == "" or .fallbackTag == null or .fallbackTag == "_bl_balance_all_gate") then .strategy.type = "leastPing" | .fallbackTag = "direct" else . end] else . end' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
+
+                # Remove direct routing for YouTube (prevents 128kbps throttling on Russian server IP)
+                jq '.routing.rules = [.routing.rules[]? | select((.domain? == ["geosite:youtube"] and .outboundTag? == "direct") | not)]' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
 
                 jq . "$TMP_JSON" > "$XRAY_CONFIG"
 

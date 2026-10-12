@@ -90,12 +90,14 @@ certbot_issue_domain_cert() {
         if is_placeholder_email "$_em"; then
             certbot certonly --standalone --non-interactive --agree-tos \
                 --register-unsafely-without-email \
+                --cert-name "$_d" --expand \
                 ${_opt} \
                 -d "$_d" \
                 --preferred-challenges http
         else
             certbot certonly --standalone --non-interactive --agree-tos \
                 --email "$_em" --no-eff-email \
+                --cert-name "$_d" --expand \
                 ${_opt} \
                 -d "$_d" \
                 --preferred-challenges http
