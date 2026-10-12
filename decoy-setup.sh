@@ -88,13 +88,56 @@ switch_template() {
     fi
 }
 
-resolve_ssl_certs() {
-    target_domain="${XUI_SELFSTEAL_DOMAIN:-${XUI_HAPROXY_DOMAIN:-${XUI_DOMAIN:-}}}"
-    if [ -z "$target_domain" ] && [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-        db_sub=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='subDomain';" 2>/dev/null || echo "")
-        db_web=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webDomain';" 2>/dev/null || echo "")
-        target_domain="${db_sub:-${db_web}}"
+get_decoy_domain() {
+    d="${XUI_SELFSTEAL_DOMAIN:-${XUI_HAPROXY_DOMAIN:-${XUI_DOMAIN:-${XUI_SUB_DOMAIN:-}}}}"
+    if [ -z "$d" ] || [ "$d" = "127.0.0.1" ] || [ "$d" = "localhost" ]; then
+        if [ -f "/etc/x-ui/x-ui.db" ]; then
+            if command -v sqlite3 >/dev/null 2>&1; then
+                d=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='subDomain' AND value != '';" 2>/dev/null || true)
+                [ -z "$d" ] && d=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webDomain' AND value != '';" 2>/dev/null || true)
+            elif command -v python3 >/dev/null 2>&1; then
+                d=$(python3 -c "import sqlite3; c=sqlite3.connect('/etc/x-ui/x-ui.db').cursor(); r=c.execute(\"SELECT value FROM settings WHERE key='subDomain' AND value != ''\").fetchone(); print(r[0] if r else '')" 2>/dev/null || true)
+                [ -z "$d" ] && d=$(python3 -c "import sqlite3; c=sqlite3.connect('/etc/x-ui/x-ui.db').cursor(); r=c.execute(\"SELECT value FROM settings WHERE key='webDomain' AND value != ''\").fetchone(); print(r[0] if r else '')" 2>/dev/null || true)
+            fi
+        fi
     fi
+    # If still empty, check letsencrypt certs: look for base domain
+    if [ -z "$d" ] && [ -d "/etc/letsencrypt/live" ]; then
+        for ldir in /etc/letsencrypt/live/*; do
+            [ -d "$ldir" ] || continue
+            bname=$(basename "$ldir")
+            case "$bname" in
+                ""|README|*fallback*) continue ;;
+                edge.*|portal.*|ingest.*|sub.*) continue ;;
+                *)
+                    if [ -f "${ldir}/fullchain.pem" ]; then
+                        d="$bname"
+                        break
+                    fi
+                    ;;
+            esac
+        done
+        if [ -z "$d" ]; then
+            for ldir in /etc/letsencrypt/live/*; do
+                [ -d "$ldir" ] || continue
+                bname=$(basename "$ldir")
+                case "$bname" in
+                    ""|README|*fallback*) continue ;;
+                    *)
+                        if [ -f "${ldir}/fullchain.pem" ]; then
+                            d="$bname"
+                            break
+                        fi
+                        ;;
+                esac
+            done
+        fi
+    fi
+    echo "$d"
+}
+
+resolve_ssl_certs() {
+    target_domain=$(get_decoy_domain)
     cert=""
     key=""
 
@@ -104,7 +147,29 @@ resolve_ssl_certs() {
         if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
             cert="$cand_cert"
             key="$cand_key"
-        elif command -v certbot_issue_domain_cert >/dev/null 2>&1 || [ -f "${SCRIPT_DIR}/certbot-domain.sh" ] || [ -f "${XUI_DIR}/certbot-domain.sh" ]; then
+        fi
+    fi
+
+    # Check if target_domain is covered in SAN of any existing Let's Encrypt certificate
+    if [ -z "$cert" ] && [ -n "$target_domain" ] && command -v openssl >/dev/null 2>&1; then
+        for ldir in /etc/letsencrypt/live/*; do
+            [ -d "$ldir" ] || continue
+            cand_c="${ldir}/fullchain.pem"
+            cand_k="${ldir}/privkey.pem"
+            if [ -f "$cand_c" ] && [ -f "$cand_k" ]; then
+                if openssl x509 -in "$cand_c" -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:${target_domain}"; then
+                    cert="$cand_c"
+                    key="$cand_k"
+                    break
+                fi
+            fi
+        done
+    fi
+
+    if [ -z "$cert" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "localhost" ]; then
+        cand_cert="/etc/letsencrypt/live/${target_domain}/fullchain.pem"
+        cand_key="/etc/letsencrypt/live/${target_domain}/privkey.pem"
+        if command -v certbot_issue_domain_cert >/dev/null 2>&1 || [ -f "${SCRIPT_DIR}/certbot-domain.sh" ] || [ -f "${XUI_DIR}/certbot-domain.sh" ]; then
             if ! command -v certbot_issue_domain_cert >/dev/null 2>&1; then
                 # shellcheck disable=SC1090
                 . "${SCRIPT_DIR}/certbot-domain.sh" 2>/dev/null || . "${XUI_DIR}/certbot-domain.sh" 2>/dev/null || true
@@ -131,20 +196,30 @@ resolve_ssl_certs() {
 
     if [ -z "$cert" ]; then
         # Find any available Let's Encrypt certificate
-        found_cert=$(find /etc/letsencrypt/live/ -name "fullchain.pem" 2>/dev/null | head -n 1)
-        if [ -n "$found_cert" ]; then
-            f_dom=$(echo "$found_cert" | awk -F'/' '{print $(NF-1)}')
-            found_key="/etc/letsencrypt/live/${f_dom}/privkey.pem"
-            if [ -f "$found_key" ]; then
-                cert="$found_cert"
-                key="$found_key"
+        for ldir in /etc/letsencrypt/live/*; do
+            [ -d "$ldir" ] || continue
+            case "$(basename "$ldir")" in
+                ""|README|*fallback*) continue ;;
+            esac
+            if [ -f "${ldir}/fullchain.pem" ] && [ -f "${ldir}/privkey.pem" ]; then
+                cert="${ldir}/fullchain.pem"
+                key="${ldir}/privkey.pem"
+                [ -z "$target_domain" ] && target_domain="$(basename "$ldir")"
+                break
             fi
-        fi
+        done
     fi
 
-    if [ -z "$cert" ] && [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-        db_cert=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
-        db_key=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+    if [ -z "$cert" ] && [ -f "/etc/x-ui/x-ui.db" ]; then
+        db_cert=""
+        db_key=""
+        if command -v sqlite3 >/dev/null 2>&1; then
+            db_cert=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+            db_key=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webKeyFile';" 2>/dev/null || echo "")
+        elif command -v python3 >/dev/null 2>&1; then
+            db_cert=$(python3 -c "import sqlite3; c=sqlite3.connect('/etc/x-ui/x-ui.db').cursor(); r=c.execute(\"SELECT value FROM settings WHERE key='webCertFile'\").fetchone(); print(r[0] if r else '')" 2>/dev/null || true)
+            db_key=$(python3 -c "import sqlite3; c=sqlite3.connect('/etc/x-ui/x-ui.db').cursor(); r=c.execute(\"SELECT value FROM settings WHERE key='webKeyFile'\").fetchone(); print(r[0] if r else '')" 2>/dev/null || true)
+        fi
         if [ -n "$db_cert" ] && [ -n "$db_key" ] && [ -f "$db_cert" ] && [ -f "$db_key" ]; then
             cert="$db_cert"
             key="$db_key"
@@ -167,13 +242,14 @@ resolve_ssl_certs() {
         key="$fallback_key"
     fi
 
-    printf "%s|%s\n" "$cert" "$key"
+    printf "%s|%s|%s\n" "$cert" "$key" "$target_domain"
 }
 
 generate_nginx_conf() {
     ssl_info=$(resolve_ssl_certs)
     cert=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f1 | tr -d '\r\n')
     key=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f2 | tr -d '\r\n')
+    target_domain=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f3 | tr -d '\r\n')
 
     # Double check cert validity
     if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
