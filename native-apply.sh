@@ -179,7 +179,7 @@ fi
 
 "${XUI_DIR}/init-config.sh"
 
-case "${XUI_HAPROXY_ENABLE:-true}" in
+case "${XUI_HAPROXY_ENABLE:-false}" in
     true|TRUE|1|yes|YES|on|ON)
         # 1. Native HAProxy service (systemd)
         if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
@@ -218,7 +218,15 @@ case "${XUI_HAPROXY_ENABLE:-true}" in
         fi
         ;;
     *)
-        echo -e "${yellow}  HAProxy отключен (XUI_HAPROXY_ENABLE=${XUI_HAPROXY_ENABLE})${plain}"
+        echo -e "${yellow}  [HAPROXY] ВЫКЛЮЧЕН (XUI_HAPROXY_ENABLE=${XUI_HAPROXY_ENABLE:-false})${plain}"
+        echo -e "${green}  ✓ Все инбаунды слушают напрямую на внешних портах 0.0.0.0${plain}"
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop haproxy >/dev/null 2>&1 || true
+            systemctl disable haproxy >/dev/null 2>&1 || true
+        fi
+        if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+            docker stop 3x-haproxy >/dev/null 2>&1 || true
+        fi
         ;;
 esac
 

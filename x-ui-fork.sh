@@ -234,6 +234,32 @@ case "${1:-help}" in
         ;;
     status)
         need_root
+        env_file="/etc/x-ui/.env"
+        [ -f "$env_file" ] || env_file="${PROJECT_DIR}/.env"
+        haproxy_env="false"
+        bind_local_env="false"
+        if [ -f "$env_file" ]; then
+            haproxy_env=$(grep -E "^XUI_HAPROXY_ENABLE=" "$env_file" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "false")
+            bind_local_env=$(grep -E "^XUI_HAPROXY_BIND_LOCAL=" "$env_file" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "false")
+        fi
+
+        echo -e "${green}============================================================================${plain}"
+        echo -e "${green}                      РЕЖИМ МАРШРУТИЗАЦИИ (CONFIG / .ENV)                   ${plain}"
+        echo -e "${green}============================================================================${plain}"
+        if [ "$haproxy_env" = "true" ]; then
+            echo -e "  HAProxy (порт 443):    ${green}ВКЛЮЧЕН${plain}  (XUI_HAPROXY_ENABLE=true)"
+            if [ "$bind_local_env" = "true" ]; then
+                echo -e "  Привязка портов:       ${yellow}127.0.0.1${plain} (XUI_HAPROXY_BIND_LOCAL=true, порты скрыты)"
+            else
+                echo -e "  Привязка портов:       ${cyan}0.0.0.0${plain}   (XUI_HAPROXY_BIND_LOCAL=false, порты открыты)"
+            fi
+        else
+            echo -e "  HAProxy (порт 443):    ${yellow}ВЫКЛЮЧЕН${plain} (XUI_HAPROXY_ENABLE=${haproxy_env:-false})"
+            echo -e "  Привязка портов:       ${green}0.0.0.0${plain}   (Option B — ноды на прямых публичных портах)"
+        fi
+        echo -e "${green}============================================================================${plain}"
+        echo ""
+
         if command -v systemctl >/dev/null 2>&1; then
             echo -e "${green}=== Статус x-ui ===${plain}"
             systemctl status x-ui --no-pager || true
@@ -323,6 +349,23 @@ case "${1:-help}" in
         ;;
     haproxy)
         need_root
+        env_file="/etc/x-ui/.env"
+        [ -f "$env_file" ] || env_file="${PROJECT_DIR}/.env"
+        haproxy_env="false"
+        if [ -f "$env_file" ]; then
+            haproxy_env=$(grep -E "^XUI_HAPROXY_ENABLE=" "$env_file" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "false")
+        fi
+        if [ "$haproxy_env" != "true" ]; then
+            echo -e "${yellow}============================================================================${plain}"
+            echo -e "${yellow}  HAProxy ВЫКЛЮЧЕН в .env (XUI_HAPROXY_ENABLE=${haproxy_env:-false})${plain}"
+            echo -e "  Все инбаунды работают напрямую на внешних портах (Option B)."
+            echo -e "  Чтобы включить HAProxy, установите в .env:"
+            echo -e "    XUI_HAPROXY_ENABLE=true"
+            echo -e "    XUI_HAPROXY_BIND_LOCAL=true"
+            echo -e "  и выполните: x-ui-fork apply"
+            echo -e "${yellow}============================================================================${plain}"
+            echo ""
+        fi
         if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet haproxy 2>/dev/null; then
             echo -e "${green}=== Статус сервиса haproxy.service (systemd) ===${plain}"
             systemctl status haproxy --no-pager

@@ -417,11 +417,20 @@ echo ""
 systemctl restart x-ui
 sleep 2
 
-if command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+haproxy_enable_val="false"
+if [ -f "${XUI_CONFIG_DIR}/.env" ]; then
+    haproxy_enable_val=$(grep -E "^XUI_HAPROXY_ENABLE=" "${XUI_CONFIG_DIR}/.env" | tail -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+fi
+if [ "$haproxy_enable_val" = "true" ] && command -v haproxy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
     mkdir -p /etc/haproxy
     [ -f "${XUI_CONFIG_DIR}/haproxy.cfg" ] && cp -f "${XUI_CONFIG_DIR}/haproxy.cfg" /etc/haproxy/haproxy.cfg 2>/dev/null || true
     systemctl enable haproxy >/dev/null 2>&1 || true
     systemctl restart haproxy >/dev/null 2>&1 || true
+else
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop haproxy >/dev/null 2>&1 || true
+        systemctl disable haproxy >/dev/null 2>&1 || true
+    fi
 fi
 
 if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then

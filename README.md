@@ -198,8 +198,8 @@ sudo ./setup-telegram-webproxy.sh --status
 ### HAProxy и порт 443
 
 | Переменная | Описание | По умолчанию |
-|------------|----------|--------------|
-| `XUI_HAPROXY_ENABLE` | Включить HAProxy и автомаршрутизацию Reality/TLS по SNI на порт 443 | `true` |
+| `XUI_HAPROXY_ENABLE` | Включить HAProxy и автомаршрутизацию Reality/TLS по SNI на порт 443 | `false` |
+| `XUI_HAPROXY_BIND_LOCAL` | Привязывать инбаунды к 127.0.0.1 (только при включённом HAProxy) | `false` |
 | `XUI_HAPROXY_DOMAIN` | Внешний домен сервера для клиентов и узлов подписки (например, `vpn.example.com`). Если пусто, используется `XUI_DOMAIN` или IP | — |
 
 ### SelfSteal (Сайт-заглушка)

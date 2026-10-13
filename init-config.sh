@@ -640,13 +640,32 @@ sync_haproxy_and_hosts() {
         *) haproxy_enabled=0 ;;
     esac
 
-    if [ "$haproxy_enabled" -eq 0 ]; then
-        echo "[HAPROXY] Disabled via XUI_HAPROXY_ENABLE=false"
+    haproxy_bind_local=0
+    case "${XUI_HAPROXY_BIND_LOCAL:-false}" in
+        true|TRUE|1|yes|YES|on|ON) haproxy_bind_local=1 ;;
+        *) haproxy_bind_local=0 ;;
+    esac
+
+    echo "============================================================================"
+    if [ "$haproxy_enabled" -eq 1 ]; then
+        echo "[HAPROXY] Статус:    [ ВКЛЮЧЕН ] (порт 443 SNI мультиплексирование)"
+        if [ "$haproxy_bind_local" -eq 1 ]; then
+            echo "[HAPROXY] Привязка:  [ 127.0.0.1 ] (порты инбаундов скрыты локально)"
+        else
+            echo "[HAPROXY] Привязка:  [ 0.0.0.0 ] (инбаунды также доступны на внешних портах)"
+        fi
+    else
+        echo "[HAPROXY] Статус:    [ ВЫКЛЮЧЕН ] (XUI_HAPROXY_ENABLE=false, Option B)"
+        echo "[HAPROXY] Привязка:  [ 0.0.0.0 ] (все Reality/TLS инбаунды слушают публично)"
         if command -v systemctl >/dev/null 2>&1; then
             systemctl stop haproxy >/dev/null 2>&1 || true
             systemctl disable haproxy >/dev/null 2>&1 || true
         fi
+        if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+            docker stop 3x-haproxy >/dev/null 2>&1 || true
+        fi
     fi
+    echo "============================================================================"
 
     command -v sqlite3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || {
         echo "[HAPROXY] sqlite3 or jq not found, skipping HAProxy synchronization"
@@ -767,11 +786,9 @@ SET listen = '127.0.0.1'
 WHERE listen GLOB '*[a-zA-Z]*';
 " 2>/dev/null || true
 
-    # Automatically bind routed TCP inbounds to 127.0.0.1 ONLY when HAProxy multiplexing is enabled!
-    if [ "$haproxy_enabled" -eq 1 ]; then
-        case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
-            true|TRUE|1|yes|YES|on|ON)
-                sqlite_db "
+    # Automatically bind routed TCP inbounds to 127.0.0.1 ONLY when BOTH HAProxy AND bind_local are enabled!
+    if [ "$haproxy_enabled" -eq 1 ] && [ "$haproxy_bind_local" -eq 1 ]; then
+        sqlite_db "
 UPDATE inbounds
 SET listen = '127.0.0.1'
 WHERE enable = 1
@@ -802,10 +819,8 @@ WHERE enable = 1
   )
   AND (listen = '127.0.0.1' OR listen = '0.0.0.0');
 " 2>/dev/null || true
-                ;;
-        esac
     else
-        # When HAProxy is disabled (Option B):
+        # When HAProxy is disabled OR bind_local is false (Option B):
         # Reality, TLS, Hysteria, MTProto MUST listen publicly on 0.0.0.0 (listen = '')
         # Only inbounds explicitly reverse-proxied by Nginx (e.g. xhttp with security=none) listen on 127.0.0.1
         sqlite_db "
