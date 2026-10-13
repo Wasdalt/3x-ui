@@ -676,26 +676,28 @@ WHERE key = 'xrayTemplateConfig'
 " >/dev/null 2>&1 || true
 
     selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
-    inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol NOT IN ('hysteria', 'hysteria2', 'tuic', 'wireguard') AND (stream_settings IS NULL OR json_extract(stream_settings, '$.network') != 'kcp');" 2>/dev/null || echo "")
-    if [ -n "$inbounds_443" ]; then
-        shift_port=10443
-        for i_id in $inbounds_443; do
-            [ -n "$i_id" ] || continue
-            while true; do
-                if [ "$shift_port" -eq "$selfsteal_port_safe" ] || [ "$shift_port" -eq 443 ]; then
+    if [ "$haproxy_enabled" -eq 1 ]; then
+        inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol NOT IN ('hysteria', 'hysteria2', 'tuic', 'wireguard') AND (stream_settings IS NULL OR json_extract(stream_settings, '$.network') != 'kcp');" 2>/dev/null || echo "")
+        if [ -n "$inbounds_443" ]; then
+            shift_port=10443
+            for i_id in $inbounds_443; do
+                [ -n "$i_id" ] || continue
+                while true; do
+                    if [ "$shift_port" -eq "$selfsteal_port_safe" ] || [ "$shift_port" -eq 443 ]; then
+                        shift_port=$((shift_port + 1))
+                        continue
+                    fi
+                    taken=$(sqlite_db "SELECT id FROM inbounds WHERE port = ${shift_port} LIMIT 1;" 2>/dev/null || echo "")
+                    if [ -z "$taken" ]; then
+                        break
+                    fi
                     shift_port=$((shift_port + 1))
-                    continue
-                fi
-                taken=$(sqlite_db "SELECT id FROM inbounds WHERE port = ${shift_port} LIMIT 1;" 2>/dev/null || echo "")
-                if [ -z "$taken" ]; then
-                    break
-                fi
+                done
+                echo "[HAPROXY] Inbound id=${i_id} is listening on 443, shifting to internal port ${shift_port} for HAProxy"
+                sqlite_db "UPDATE inbounds SET port = ${shift_port} WHERE id = ${i_id};"
                 shift_port=$((shift_port + 1))
             done
-            echo "[HAPROXY] Inbound id=${i_id} is listening on 443, shifting to internal port ${shift_port} for HAProxy"
-            sqlite_db "UPDATE inbounds SET port = ${shift_port} WHERE id = ${i_id};"
-            shift_port=$((shift_port + 1))
-        done
+        fi
     fi
     reality_rows=$(sqlite_db -separator '|' "
 SELECT id, stream_settings
@@ -750,7 +752,7 @@ WHERE enable = 1
 UPDATE inbounds
 SET stream_settings = json_set(stream_settings, '$.realitySettings.minClientVer', '1.0.0')
 WHERE enable = 1
-  AND json_valid(stream_settings) = 1
+  AND json_valid(stream_settings)
   AND json_extract(stream_settings, '$.security') = 'reality'
   AND (
     json_extract(stream_settings, '$.realitySettings.minClientVer') IS NULL
@@ -765,12 +767,11 @@ SET listen = '127.0.0.1'
 WHERE listen GLOB '*[a-zA-Z]*';
 " 2>/dev/null || true
 
-    # Automatically bind routed TCP inbounds to 127.0.0.1 to hide backend ports from port scanners
-    # (Direct protocols like Shadowsocks, Hysteria, WireGuard, Socks, mKCP, raw TCP must listen publicly on 0.0.0.0)
-    # Never bind to 127.0.0.1 if host for this inbound is disabled (is_disabled = 1) in hosts table
-    case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
-        true|TRUE|1|yes|YES|on|ON)
-            sqlite_db "
+    # Automatically bind routed TCP inbounds to 127.0.0.1 ONLY when HAProxy multiplexing is enabled!
+    if [ "$haproxy_enabled" -eq 1 ]; then
+        case "${XUI_HAPROXY_BIND_LOCAL:-true}" in
+            true|TRUE|1|yes|YES|on|ON)
+                sqlite_db "
 UPDATE inbounds
 SET listen = '127.0.0.1'
 WHERE enable = 1
@@ -801,8 +802,28 @@ WHERE enable = 1
   )
   AND (listen = '127.0.0.1' OR listen = '0.0.0.0');
 " 2>/dev/null || true
-            ;;
-    esac
+                ;;
+        esac
+    else
+        # When HAProxy is disabled (Option B):
+        # Reality, TLS, Hysteria, MTProto MUST listen publicly on 0.0.0.0 (listen = '')
+        # Only inbounds explicitly reverse-proxied by Nginx (e.g. xhttp with security=none) listen on 127.0.0.1
+        sqlite_db "
+UPDATE inbounds
+SET listen = ''
+WHERE enable = 1
+  AND (
+    json_extract(stream_settings, '$.security') IN ('reality', 'tls')
+    OR protocol IN ('mtproto', 'hysteria', 'hysteria2', 'tuic', 'wireguard', 'shadowsocks')
+  );
+
+UPDATE inbounds
+SET listen = '127.0.0.1'
+WHERE enable = 1
+  AND json_extract(stream_settings, '$.network') IN ('xhttp', 'splithttp', 'ws', 'upgrade', 'httpupgrade', 'grpc')
+  AND (json_extract(stream_settings, '$.security') = 'none' OR json_extract(stream_settings, '$.security') IS NULL);
+" 2>/dev/null || true
+    fi
 
     # SelfSteal Decoy Site integration settings
     selfsteal_enabled=0
