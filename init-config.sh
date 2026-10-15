@@ -1936,21 +1936,6 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
                 [ -n "$XUI_XRAY_ERROR_LOG" ] && jq --arg val "$XUI_XRAY_ERROR_LOG" '.log.error = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
                 [ -n "$XUI_XRAY_LOG_LEVEL" ] && jq --arg val "$XUI_XRAY_LOG_LEVEL" '.log.loglevel = $val' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
 
-                # Remove anti-abuse blocking rules as requested by user
-                jq '.routing.rules = [.routing.rules[]? | select((.port? != "25,465,587") and (.port? != "23,135,137,138,139,445"))]' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-
-                # Ensure balancers don't get stuck in blind roundRobin when outbound is dead; convert all to leastPing with direct fallback
-                jq 'if .routing.balancers then .routing.balancers = [.routing.balancers[] | .strategy.type = "leastPing" | if (.fallbackTag == "" or .fallbackTag == null or .fallbackTag == "_bl_balance_all_gate") then .fallbackTag = "direct" else . end] else . end' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-
-                # Speed up burstObservatory probe interval and use reliable Cloudflare 204 endpoint
-                jq 'if .burstObservatory.pingConfig then .burstObservatory.pingConfig.interval = "15s" | .burstObservatory.pingConfig.destination = "http://cp.cloudflare.com/generate_204" else . end' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-
-                # Add fast direct ping/connectivity check rule for client app pings (Cloudflare, Google, Apple)
-                jq 'if .routing.rules then if ([.routing.rules[] | select(.domain? == ["domain:cp.cloudflare.com","domain:connectivitycheck.gstatic.com","domain:msftconnecttest.com","domain:captive.apple.com"])] | length) == 0 then .routing.rules = [{type: "field", domain: ["domain:cp.cloudflare.com","domain:connectivitycheck.gstatic.com","domain:msftconnecttest.com","domain:captive.apple.com"], outboundTag: "direct"}] + .routing.rules else . end else . end' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-
-                # Remove direct routing for YouTube (prevents 128kbps throttling on Russian server IP)
-                jq '.routing.rules = [.routing.rules[]? | select((.domain? == ["geosite:youtube"] and .outboundTag? == "direct") | not)]' "$TMP_JSON" > "${TMP_JSON}.tmp" && mv "${TMP_JSON}.tmp" "$TMP_JSON"
-
                 jq . "$TMP_JSON" > "$XRAY_CONFIG"
 
                 TMP_ESCAPED=$(mktemp)
