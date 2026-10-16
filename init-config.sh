@@ -1249,7 +1249,20 @@ ORDER BY id ASC;
                 alpn='["h2"]'
             fi
 
-            # 5. Determine target port and host security based on protocol, transport and security:
+            # 5. Check if host entry already exists for this inbound
+            existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
+            host_id=""
+            curr_addr=""
+            curr_port=""
+            curr_dis=""
+            if [ -n "$existing_host" ]; then
+                host_id=$(echo "$existing_host" | cut -d'|' -f1)
+                curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
+                curr_port=$(echo "$existing_host" | cut -d'|' -f3)
+                curr_dis=$(echo "$existing_host" | cut -d'|' -f4)
+            fi
+
+            # 6. Determine target port and host security based on protocol, transport and security:
             case "$proto" in
                 hysteria|hysteria2|tuic)
                     target_port="$port"
@@ -1267,8 +1280,26 @@ ORDER BY id ASC;
                     if [ "$net" = "kcp" ]; then
                         target_port="$port"
                         host_sec="$sec"
+                    elif [ "$sec" = "reality" ]; then
+                        if [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ "$port" = "443" ]; then
+                            target_port=443
+                        elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$sni" ]; then
+                            target_port=443
+                        else
+                            target_port="$port"
+                        fi
+                        host_sec="reality"
+                    elif [ "$sec" = "tls" ]; then
+                        if [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ "$port" = "443" ]; then
+                            target_port=443
+                        elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$sni" ]; then
+                            target_port=443
+                        else
+                            target_port="$port"
+                        fi
+                        host_sec="tls"
                     elif [ "$net" = "ws" ] || [ "$net" = "xhttp" ] || [ "$net" = "splithttp" ] || [ "$net" = "grpc" ] || [ "$net" = "upgrade" ] || [ "$net" = "httpupgrade" ]; then
-                        # Reverse-proxied via Nginx Decoy on port 443 with TLS
+                        # Reverse-proxied via Nginx Decoy on port 443 with TLS (for security=none inbounds)
                         target_port=443
                         host_sec="tls"
                         [ -z "$sni" ] && sni="$target_domain"
@@ -1277,7 +1308,7 @@ ORDER BY id ASC;
                         target_port=443
                         host_sec="$sec"
                     else
-                        # Direct port for Reality and direct TCP TLS
+                        # Direct port for unencrypted or custom TCP
                         target_port="$port"
                         host_sec="$sec"
                     fi
@@ -1304,13 +1335,7 @@ ORDER BY id ASC;
                 esac
             fi
 
-            existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
             if [ -n "$existing_host" ]; then
-                host_id=$(echo "$existing_host" | cut -d'|' -f1)
-                curr_addr=$(echo "$existing_host" | cut -d'|' -f2)
-                curr_port=$(echo "$existing_host" | cut -d'|' -f3)
-                curr_dis=$(echo "$existing_host" | cut -d'|' -f4)
-
                 if [ -n "$XUI_HOSTS_ADDRESS" ]; then
                     host_addr="$XUI_HOSTS_ADDRESS"
                 elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
@@ -1338,6 +1363,8 @@ ORDER BY id ASC;
 
                 if [ "$curr_dis" = "1" ]; then
                     host_port="$port"
+                elif [ "$curr_port" = "443" ]; then
+                    host_port=443
                 else
                     host_port="$target_port"
                 fi
