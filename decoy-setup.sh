@@ -5,7 +5,7 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 XUI_DIR="${XUI_DIR:-/usr/local/x-ui}"
 CONFIG_DIR="${XUI_CONFIG_DIR:-/etc/x-ui}"
 ENV_FILE="${XUI_ENV_FILE:-${CONFIG_DIR}/.env}"
@@ -28,6 +28,252 @@ SERVICE_FILE="/etc/systemd/system/x-ui-decoy.service"
 
 SELFSTEAL_PORT="${XUI_SELFSTEAL_PORT:-10444}"
 SELFSTEAL_TEMPLATE="${XUI_SELFSTEAL_TEMPLATE:-shopflow}"
+SELFSTEAL_MODE="${XUI_SELFSTEAL_MODE:-legacy}"
+# A private directory prevents other local users from connecting to/spoofing the backend.
+# The native x-ui/Xray service must run as root to use this endpoint.
+REALITY_SOCKET="/run/x-ui-selfsteal/https.sock"
+
+case "$SELFSTEAL_MODE" in
+    legacy|reality) ;;
+    *) echo "[SELFSTEAL-ERROR] XUI_SELFSTEAL_MODE должен быть legacy или reality" >&2; exit 1 ;;
+esac
+
+validate_reality_config() {
+    local tool cert_pub key_pub
+    case "$SELFSTEAL_TEMPLATE" in
+        shopflow|tech|converter|blog|corporate) ;;
+        *) echo "[SELFSTEAL-ERROR] Неизвестный шаблон SelfSteal" >&2; return 1 ;;
+    esac
+    for tool in nginx openssl curl; do
+        command -v "$tool" >/dev/null 2>&1 || {
+            echo "[SELFSTEAL-ERROR] Для режима reality требуется ${tool}" >&2
+            return 1
+        }
+    done
+    case "${XUI_HAPROXY_ENABLE:-false}" in
+        true|TRUE|1|yes|YES|on|ON)
+            echo "[SELFSTEAL-ERROR] Режим reality требует XUI_HAPROXY_ENABLE=false" >&2
+            return 1 ;;
+    esac
+    case "${XUI_SELFSTEAL_ENABLE:-true}" in
+        true|TRUE|1|yes|YES|on|ON) ;;
+        *) echo "[SELFSTEAL-ERROR] Режим reality требует XUI_SELFSTEAL_ENABLE=true" >&2; return 1 ;;
+    esac
+    case "${XUI_SELFSTEAL_PUBLIC:-false}" in
+        true|TRUE|1|yes|YES|on|ON)
+            echo "[SELFSTEAL-ERROR] В режиме reality порт 443 принадлежит Xray, не Nginx; отключите XUI_SELFSTEAL_PUBLIC" >&2
+            return 1 ;;
+    esac
+    REALITY_DOMAIN="${XUI_SELFSTEAL_DOMAIN:-}"
+    # No implicit panel-domain fallback, wildcards, ports or nginx configuration syntax.
+    if [ "${#REALITY_DOMAIN}" -gt 253 ] ||
+       ! printf '%s\n' "$REALITY_DOMAIN" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'; then
+        echo "[SELFSTEAL-ERROR] Укажите собственный DNS-домен в XUI_SELFSTEAL_DOMAIN (без схемы, порта и wildcard)" >&2
+        return 1
+    fi
+    case "$SELFSTEAL_PORT" in
+        ''|*[!0-9]*) echo "[SELFSTEAL-ERROR] Некорректный XUI_SELFSTEAL_PORT" >&2; return 1 ;;
+    esac
+    if [ "${#SELFSTEAL_PORT}" -gt 5 ] || [ "$SELFSTEAL_PORT" -lt 1024 ] || [ "$SELFSTEAL_PORT" -gt 65535 ]; then
+        echo "[SELFSTEAL-ERROR] Локальный XUI_SELFSTEAL_PORT должен быть в диапазоне 1024–65535" >&2
+        return 1
+    fi
+    REALITY_CERT="${XUI_SELFSTEAL_CERT_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/fullchain.pem}"
+    REALITY_KEY="${XUI_SELFSTEAL_KEY_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/privkey.pem}"
+    local path
+    for path in "$REALITY_CERT" "$REALITY_KEY" "$PUBLIC_DIR"; do
+        if ! [[ "$path" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
+            echo "[SELFSTEAL-ERROR] Требуется абсолютный путь без пробелов и специальных символов: ${path}" >&2
+            return 1
+        fi
+    done
+    [ -r "$REALITY_CERT" ] && [ -r "$REALITY_KEY" ] || {
+        echo "[SELFSTEAL-ERROR] Нет читаемого сертификата/ключа для ${REALITY_DOMAIN}; самоподписанный fallback запрещён" >&2
+        return 1
+    }
+    openssl x509 -in "$REALITY_CERT" -noout -checkend 86400 >/dev/null 2>&1 &&
+    openssl x509 -in "$REALITY_CERT" -noout -checkhost "$REALITY_DOMAIN" >/dev/null 2>&1 &&
+    openssl verify -purpose sslserver -verify_hostname "$REALITY_DOMAIN" \
+        -untrusted "$REALITY_CERT" "$REALITY_CERT" >/dev/null 2>&1 || {
+        echo "[SELFSTEAL-ERROR] Сертификат должен быть доверенным, действительным ещё сутки и покрывать ${REALITY_DOMAIN}" >&2
+        return 1
+    }
+    # -passin prevents an encrypted key from hanging an unattended service startup.
+    cert_pub=$(set -o pipefail; openssl x509 -in "$REALITY_CERT" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256) || return 1
+    key_pub=$(set -o pipefail; openssl pkey -in "$REALITY_KEY" -passin pass: -pubout -outform DER | openssl dgst -sha256) || return 1
+    if [ "$cert_pub" != "$key_pub" ]; then
+        echo "[SELFSTEAL-ERROR] Закрытый ключ не соответствует сертификату" >&2
+        return 1
+    fi
+    REALITY_PROXY_LOCATIONS=""
+    if [ -n "${XUI_SELFSTEAL_PROXY_INBOUNDS:-}" ]; then
+        if ! command -v python3 >/dev/null 2>&1 || [ ! -f "${DECOY_ROOT}/reality_routes.py" ]; then
+            echo "[SELFSTEAL-ERROR] Для выбранных HTTP-маршрутов нужны python3 и decoy/reality_routes.py" >&2
+            return 1
+        fi
+        REALITY_PROXY_LOCATIONS=$(python3 "${DECOY_ROOT}/reality_routes.py" \
+            --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
+            --ids "$XUI_SELFSTEAL_PROXY_INBOUNDS" --backend-port "$SELFSTEAL_PORT") || return 1
+    fi
+}
+
+validate_reality_runtime() {
+    if [ -f "/.dockerenv" ] || [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null 2>&1; then
+        echo "[SELFSTEAL-ERROR] Режим reality пока поддерживает только нативную установку с systemd; Docker/Python fallback не поддерживаются" >&2
+        return 1
+    fi
+    [ "$(id -u)" -eq 0 ] || {
+        echo "[SELFSTEAL-ERROR] Применение режима reality требует root" >&2
+        return 1
+    }
+    if systemctl is-active --quiet haproxy.service 2>/dev/null; then
+        echo "[SELFSTEAL-ERROR] HAProxy ещё запущен; сначала подготовьте отдельную миграцию, службы автоматически не останавливаются" >&2
+        return 1
+    fi
+}
+
+reality_plan() {
+    validate_reality_config || return 1
+    cat <<EOF
+SelfSteal: REALITY -> локальный HTTPS Nginx (без изменения БД).
+Поддерживается нативная установка с systemd, x-ui/Xray от root.
+В НОВОМ тестовом входящем панели:
+  Протокол: VLESS; транспорт: TCP/RAW; защита: REALITY
+  Listen: 0.0.0.0; порт: свободный тестовый (443 только если свободен)
+  Target: ${REALITY_SOCKET}
+  xver / PROXY protocol: 1
+  Server Names: ${REALITY_DOMAIN}
+  Ключи Reality, UUID и непустой Short ID: создать средствами панели
+В Host выбранного входящего:
+  Адрес: ${REALITY_DOMAIN}; порт: фактический порт нового входящего
+  Security: reality; SNI: ${REALITY_DOMAIN}; fingerprint: chrome
+  Не переопределять SNI адресом; не отключать проверку сертификата
+Сертификат: ${REALITY_CERT}
+Nginx НЕ слушает публичные 80/443. Локальный HTTPS: 127.0.0.1:${SELFSTEAL_PORT}.
+Старые входящие/Hosts автоматически НЕ мигрируют. DNS и свободный порт проверьте отдельно.
+EOF
+    if [ -n "$REALITY_PROXY_LOCATIONS" ]; then
+        echo "Явно выбранные HTTP-маршруты (БД открыта read-only):"
+        printf '%s\n' "$REALITY_PROXY_LOCATIONS" | grep '^        # inbound '
+        echo "Для их клиентов: HTTPS-домен и порт REALITY-фронтенда; сохранить транспорт и path/serviceName."
+        echo "Host HTTP-транспорта: security=tls (не reality), SNI=${REALITY_DOMAIN}; для gRPC нужен HTTP/2."
+        echo "Проверка плана не подтверждает доступность backend или соединение настоящего клиента."
+    else
+        echo "HTTP-маршруты не выбраны; WS/XHTTP/gRPC автоматически не переносятся."
+    fi
+}
+
+generate_reality_nginx_conf() {
+    # Caller validates all interpolated values before writing any file.
+    local output="$1" h2_listen="http2" h2_line="" version
+    version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    if [ "$(printf '%s\n' "$version" | cut -d. -f1)" -gt 1 ] ||
+       { [ "$(printf '%s\n' "$version" | cut -d. -f1)" -eq 1 ] && [ "$(printf '%s\n' "$version" | cut -d. -f2)" -ge 25 ]; }; then
+        h2_listen=""
+        h2_line="http2 on;"
+    fi
+    cat > "$output" <<EOF
+user root;
+worker_processes 1;
+pid /run/x-ui-decoy.pid;
+error_log /var/log/x-ui-decoy.log warn;
+events { worker_connections 1024; }
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log off;
+    server_tokens off;
+    client_max_body_size 0;
+    map \$http_upgrade \$selfsteal_connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+    map \$proxy_protocol_addr \$selfsteal_client_ip {
+        default \$proxy_protocol_addr;
+        '' \$remote_addr;
+    }
+    server {
+        listen unix:${REALITY_SOCKET} ssl proxy_protocol ${h2_listen};
+        listen 127.0.0.1:${SELFSTEAL_PORT} ssl ${h2_listen};
+        ${h2_line}
+        server_name ${REALITY_DOMAIN};
+        ssl_certificate ${REALITY_CERT};
+        ssl_certificate_key ${REALITY_KEY};
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_tickets off;
+        root ${PUBLIC_DIR};
+        index index.html;
+${REALITY_PROXY_LOCATIONS:-}
+        location / { try_files \$uri \$uri/ =404; }
+        location ~ /\. { deny all; }
+    }
+}
+EOF
+}
+
+setup_reality_service() {
+    validate_reality_config || return 1
+    validate_reality_runtime || return 1
+    local current_installed="" tmp_cfg backup_dir was_active=0
+    [ -f "${PUBLIC_DIR}/.current_template" ] && current_installed=$(cat "${PUBLIC_DIR}/.current_template")
+    if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
+        switch_template "$SELFSTEAL_TEMPLATE" || return 1
+    fi
+    install -d -m 0700 /run/x-ui-selfsteal || return 1
+    tmp_cfg=$(mktemp) || return 1
+    generate_reality_nginx_conf "$tmp_cfg" || { rm -f "$tmp_cfg"; return 1; }
+    if ! nginx -t -c "$tmp_cfg"; then
+        rm -f "$tmp_cfg"
+        echo "[SELFSTEAL-ERROR] Проверка Nginx не прошла; прежняя конфигурация сохранена" >&2
+        return 1
+    fi
+    backup_dir=$(mktemp -d) || { rm -f "$tmp_cfg"; return 1; }
+    if [ -f "$NGINX_CONF" ]; then cp -p "$NGINX_CONF" "$backup_dir/nginx.conf" || return 1; fi
+    if [ -f "$SERVICE_FILE" ]; then cp -p "$SERVICE_FILE" "$backup_dir/service" || return 1; fi
+    systemctl is-active --quiet x-ui-decoy.service && was_active=1
+    mkdir -p "$(dirname "$NGINX_CONF")" || return 1
+    if [ -f "$NGINX_CONF" ] && [ ! -f "${NGINX_CONF}.pre-reality" ]; then
+        cp -p "$NGINX_CONF" "${NGINX_CONF}.pre-reality"
+    fi
+    install -m 0600 "$tmp_cfg" "$NGINX_CONF" || return 1
+    rm -f "$tmp_cfg"
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=3x-ui SelfSteal local HTTPS backend for REALITY
+After=network.target
+
+[Service]
+Type=forking
+RuntimeDirectory=x-ui-selfsteal
+RuntimeDirectoryMode=0700
+PIDFile=/run/x-ui-decoy.pid
+ExecStartPre=$(command -v nginx) -t -c ${NGINX_CONF}
+ExecStart=$(command -v nginx) -c ${NGINX_CONF}
+ExecReload=/bin/kill -s HUP \$MAINPID
+ExecStop=/bin/kill -s QUIT \$MAINPID
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    if ! systemctl daemon-reload || ! systemctl restart x-ui-decoy.service ||
+       ! curl --fail --silent --show-error --max-time 10 --noproxy '*' \
+           --haproxy-protocol --unix-socket "$REALITY_SOCKET" \
+           "https://${REALITY_DOMAIN}/" -o /dev/null; then
+        echo "[SELFSTEAL-ERROR] Запуск/HTTPS через Unix-сокет не прошёл проверку; восстанавливаю прежнюю службу" >&2
+        systemctl stop x-ui-decoy.service >/dev/null 2>&1 || true
+        if [ -f "$backup_dir/nginx.conf" ]; then cp -p "$backup_dir/nginx.conf" "$NGINX_CONF"; else rm -f "$NGINX_CONF"; fi
+        if [ -f "$backup_dir/service" ]; then cp -p "$backup_dir/service" "$SERVICE_FILE"; else rm -f "$SERVICE_FILE"; fi
+        systemctl daemon-reload || true
+        if [ "$was_active" -eq 1 ]; then systemctl start x-ui-decoy.service || true; fi
+        rm -rf "$backup_dir"
+        return 1
+    fi
+    rm -rf "$backup_dir"
+    systemctl enable x-ui-decoy.service >/dev/null || return 1
+    echo "[SELFSTEAL] Nginx готов: ${REALITY_SOCKET} (PROXY protocol v1). БД и входящие не изменены."
+}
 
 list_templates() {
     echo "Доступные шаблоны сайта-заглушки (SelfSteal):"
@@ -585,6 +831,10 @@ EOF
 }
 
 setup_and_start_service() {
+    if [ "$SELFSTEAL_MODE" = "reality" ]; then
+        setup_reality_service
+        return $?
+    fi
     if [ -d "${SCRIPT_DIR}/decoy" ] && [ "${SCRIPT_DIR}/decoy" != "${XUI_DIR}/decoy" ] && [ -d "$XUI_DIR" ]; then
         mkdir -p "${XUI_DIR}/decoy"
         cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/" 2>/dev/null || true
@@ -710,6 +960,10 @@ EOF
 
 check_status() {
     echo "=== Статус SelfSteal Decoy Web Server ==="
+    echo "Режим: ${SELFSTEAL_MODE}"
+    if [ "$SELFSTEAL_MODE" = "reality" ]; then
+        echo "Target REALITY: ${REALITY_SOCKET}; xver: 1"
+    fi
     echo "Порт: 127.0.0.1:${SELFSTEAL_PORT}"
     echo "Шаблон: ${SELFSTEAL_TEMPLATE}"
     echo "Каталог файлов: ${PUBLIC_DIR}"
@@ -731,12 +985,37 @@ check_status() {
 
     echo ""
     echo "Тест локального ответа (127.0.0.1:${SELFSTEAL_PORT}):"
+    if [ "$SELFSTEAL_MODE" = "reality" ]; then
+        validate_reality_config || return 1
+        curl --fail --silent --show-error --max-time 10 --noproxy '*' \
+            --haproxy-protocol --unix-socket "$REALITY_SOCKET" \
+            "https://${REALITY_DOMAIN}/" -o /dev/null || return 1
+        echo "✓ Unix-сокет, PROXY protocol, сертификат и HTTPS-ответ проверены"
+        return 0
+    fi
     if command -v curl >/dev/null 2>&1; then
         curl -k -s -I "https://127.0.0.1:${SELFSTEAL_PORT}/" | head -n 5 || echo "Не удалось подключиться к порту ${SELFSTEAL_PORT}"
     fi
 }
 
+# Allow isolated tests to source functions without starting services.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
+
 case "${1:-status}" in
+    plan)
+        if [ "$SELFSTEAL_MODE" != "reality" ]; then
+            echo "Для плана SelfSteal REALITY задайте XUI_SELFSTEAL_MODE=reality" >&2
+            exit 1
+        fi
+        reality_plan
+        ;;
+    validate)
+        if [ "$SELFSTEAL_MODE" = "reality" ]; then
+            validate_reality_config && validate_reality_runtime
+        fi
+        ;;
     templates|list)
         list_templates
         ;;
@@ -768,7 +1047,7 @@ case "${1:-status}" in
         check_status
         ;;
     *)
-        echo "Использование: $0 {status|templates|template <name>|preview [порт]|apply}"
+        echo "Использование: $0 {status|plan|validate|templates|template <name>|preview [порт]|apply}"
         exit 1
         ;;
 esac

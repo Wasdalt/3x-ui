@@ -169,7 +169,7 @@ Commands:
   backup    Create instant database backup
   restore   Restore database from backup file and apply configuration (optional: [file])
   haproxy   Show HAProxy container/service status, logs and config
-  selfsteal Manage SelfSteal decoy website (status, templates, template <name>)
+  selfsteal Manage decoy / REALITY SelfSteal (status, plan, validate, apply, templates)
   url       Print current panel URL from DB
   env       Print active .env path
   help      Show this help

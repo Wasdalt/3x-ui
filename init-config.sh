@@ -26,6 +26,20 @@ elif [ -f "${SCRIPT_DIR}/.env" ] && [ -r "${SCRIPT_DIR}/.env" ]; then
     set +a
 fi
 
+# Fail before database updates, orphan cleanup or service changes when the new
+# opt-in mode is misconfigured. Legacy installations retain their old behavior.
+case "${XUI_SELFSTEAL_MODE:-legacy}" in
+    legacy) ;;
+    reality)
+        if [ ! -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+            echo "[SELFSTEAL-ERROR] decoy-setup.sh отсутствует" >&2
+            exit 1
+        fi
+        bash "${SCRIPT_DIR}/decoy-setup.sh" validate || exit 1
+        ;;
+    *) echo "[SELFSTEAL-ERROR] Неизвестный XUI_SELFSTEAL_MODE" >&2; exit 1 ;;
+esac
+
 # Wait for database creation / Ждём создания БД
 for i in $(seq 1 30); do
     if [ -f "$DB_PATH" ]; then
@@ -632,6 +646,14 @@ WHERE id = ${inbound_id};
 
 sync_haproxy_and_hosts() {
     target_domain=$1
+    # This mode has explicit frontend/backend ports and manually managed Hosts.
+    # Do not run legacy bind/target fixes, forced-443 mappings or externalProxy
+    # cleanup: they would overwrite HTTP clients using a non-443 frontend.
+    if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
+        echo "[SELFSTEAL] Applying local REALITY/HTTPS backend; legacy inbound/Hosts sync skipped"
+        bash "${SCRIPT_DIR}/decoy-setup.sh" apply || return 1
+        return 0
+    fi
     haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
 
     haproxy_enabled=1
@@ -1105,7 +1127,7 @@ EOF_BK_CERTBOT
         fi
         if [ -n "$decoy_script" ]; then
             echo "[SELFSTEAL] Applying SelfSteal decoy service (${selfsteal_domain} -> port ${selfsteal_port})..."
-            sh "$decoy_script" apply >/dev/null 2>&1 || true
+            bash "$decoy_script" apply >/dev/null 2>&1 || true
         fi
     fi
 

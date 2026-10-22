@@ -158,6 +158,12 @@ if command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet nginx 2>/dev/null; then
         systemctl reload nginx 2>/dev/null || true
     fi
+    # The decoy has its own nginx master, independent of nginx.service.
+    if systemctl is-active --quiet x-ui-decoy.service 2>/dev/null; then
+        systemctl reload x-ui-decoy.service 2>/dev/null \
+            || systemctl restart x-ui-decoy.service 2>/dev/null \
+            || true
+    fi
     if systemctl is-active --quiet ${service_name} 2>/dev/null; then
         systemctl kill --kill-who=main -s HUP ${service_name} >/dev/null 2>&1 \
             || systemctl restart ${service_name} >/dev/null 2>&1 \
