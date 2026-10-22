@@ -117,10 +117,22 @@ sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2
 # Deduplicate settings table
 sqlite_db "DELETE FROM settings WHERE rowid NOT IN (SELECT MAX(rowid) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
 
+preserve_tls_setting() {
+    case "$1" in
+        webDomain|webCertFile|webKeyFile) [ "${PRESERVE_WEB_TLS:-0}" -eq 1 ] ;;
+        subDomain|subCertFile|subKeyFile) [ "${PRESERVE_SUB_TLS:-0}" -eq 1 ] ;;
+        *) return 1 ;;
+    esac
+}
+
 set_always() {
     key=$1
     value=$2
 
+    if preserve_tls_setting "$key"; then
+        echo "[KEEP] $key unchanged: certificate transition is not ready"
+        return 0
+    fi
     if [ -n "$value" ]; then
         esc_key=$(sqlite_escape "$key")
         esc_value=$(sqlite_escape "$value")
@@ -135,6 +147,10 @@ INSERT INTO settings (key, value) SELECT '${esc_key}', '${esc_value}' WHERE NOT 
 
 set_empty() {
     key=$1
+    if preserve_tls_setting "$key"; then
+        echo "[KEEP] $key unchanged: certificate transition is not ready"
+        return 0
+    fi
     esc_key=$(sqlite_escape "$key")
 
     sqlite_db "
@@ -1489,6 +1505,16 @@ WHERE stream_settings LIKE '%externalProxy%';
 
 ENV_DOMAIN="$XUI_DOMAIN"
 DB_DOMAIN=$(get_setting_value "webDomain")
+SAVED_WEB_CERT=$(get_setting_value "webCertFile")
+SAVED_WEB_KEY=$(get_setting_value "webKeyFile")
+SAVED_SUB_DOMAIN=$(get_setting_value "subDomain")
+SAVED_SUB_CERT=$(get_setting_value "subCertFile")
+SAVED_SUB_KEY=$(get_setting_value "subKeyFile")
+REQUESTED_SUB_DOMAIN="${XUI_SUB_DOMAIN:-$SAVED_SUB_DOMAIN}"
+PRESERVE_WEB_TLS=0
+PRESERVE_SUB_TLS=0
+SUB_TLS_UNAVAILABLE=0
+TRIED_ENV_DOMAIN=0
 
 FINAL_DOMAIN=""
 CERT_FILE=""
@@ -1518,6 +1544,7 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         echo "[DOMAIN] Env domain: $ENV_DOMAIN"
         echo "[DOMAIN] Trying env domain first"
 
+        TRIED_ENV_DOMAIN=1
         if try_use_domain "$ENV_DOMAIN" "$CERTBOT_EMAIL"; then
             FINAL_DOMAIN="$ENV_DOMAIN"
             echo "[DOMAIN] Using env domain: $FINAL_DOMAIN"
@@ -1530,6 +1557,7 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
     if [ -z "$FINAL_DOMAIN" ] && [ -n "$DB_DOMAIN" ]; then
         echo "[DOMAIN] Trying database domain: $DB_DOMAIN"
 
+        [ "$DB_DOMAIN" != "$ENV_DOMAIN" ] || TRIED_ENV_DOMAIN=1
         if try_use_domain "$DB_DOMAIN" "$CERTBOT_EMAIL"; then
             FINAL_DOMAIN="$DB_DOMAIN"
             echo "[DOMAIN] Using database domain: $FINAL_DOMAIN"
@@ -1538,7 +1566,7 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         fi
     fi
 
-    if [ -z "$FINAL_DOMAIN" ] && [ -n "$ENV_DOMAIN" ]; then
+    if [ -z "$FINAL_DOMAIN" ] && [ -n "$ENV_DOMAIN" ] && [ "$TRIED_ENV_DOMAIN" -eq 0 ]; then
         echo "[DOMAIN] Trying env domain as fallback: $ENV_DOMAIN"
 
         if try_use_domain "$ENV_DOMAIN" "$CERTBOT_EMAIL"; then
@@ -1556,8 +1584,8 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         CERT_FILE="/etc/letsencrypt/live/${FINAL_DOMAIN}/fullchain.pem"
         KEY_FILE="/etc/letsencrypt/live/${FINAL_DOMAIN}/privkey.pem"
 
-        if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$FINAL_DOMAIN" ]; then
-            SUB_DOMAIN="$XUI_SUB_DOMAIN"
+        if [ -n "$REQUESTED_SUB_DOMAIN" ] && [ "$REQUESTED_SUB_DOMAIN" != "$FINAL_DOMAIN" ]; then
+            SUB_DOMAIN="$REQUESTED_SUB_DOMAIN"
 
             echo "[SUB-DOMAIN] Separate subscription domain configured: $SUB_DOMAIN"
 
@@ -1566,13 +1594,14 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
                 SUB_KEY_FILE="/etc/letsencrypt/live/${SUB_DOMAIN}/privkey.pem"
                 echo "[SUB-DOMAIN] Using separate subscription domain: $SUB_DOMAIN"
             else
-                echo "[SUB-DOMAIN] Separate subscription domain is not usable, falling back to panel domain"
-                SUB_DOMAIN="$FINAL_DOMAIN"
-                SUB_CERT_FILE="$CERT_FILE"
-                SUB_KEY_FILE="$KEY_FILE"
+                echo "[SUB-DOMAIN] Certificate unavailable; preserving existing subscription domain/TLS"
+                PRESERVE_SUB_TLS=1
+                SUB_DOMAIN="$SAVED_SUB_DOMAIN"
+                SUB_CERT_FILE="$SAVED_SUB_CERT"
+                SUB_KEY_FILE="$SAVED_SUB_KEY"
             fi
         else
-            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$FINAL_DOMAIN}"
+            SUB_DOMAIN="${REQUESTED_SUB_DOMAIN:-$FINAL_DOMAIN}"
             SUB_CERT_FILE="$CERT_FILE"
             SUB_KEY_FILE="$KEY_FILE"
         fi
@@ -1598,21 +1627,21 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
     else
         echo "[DOMAIN] Certbot validation skipped or not matching. Preserving domain configuration."
 
-        XUI_DOMAIN="${ENV_DOMAIN:-$DB_DOMAIN}"
-        CERT_FILE=""
-        KEY_FILE=""
-        if [ -n "$XUI_DOMAIN" ]; then
-            cert_cand="/etc/letsencrypt/live/${XUI_DOMAIN}/fullchain.pem"
-            key_cand="/etc/letsencrypt/live/${XUI_DOMAIN}/privkey.pem"
-            if [ -f "$cert_cand" ] && [ -f "$key_cand" ]; then
-                CERT_FILE="$cert_cand"
-                KEY_FILE="$key_cand"
-                echo "[DOMAIN] Found valid local certificates on disk: $CERT_FILE"
-            fi
+        if [ -n "$DB_DOMAIN$SAVED_WEB_CERT$SAVED_WEB_KEY" ]; then
+            PRESERVE_WEB_TLS=1
+            XUI_DOMAIN="$DB_DOMAIN"
+            CERT_FILE="$SAVED_WEB_CERT"
+            KEY_FILE="$SAVED_WEB_KEY"
+            echo "[DOMAIN] Keeping stored panel domain and certificate paths; requested migration is pending"
+        else
+            XUI_DOMAIN="$ENV_DOMAIN"
+            CERT_FILE=""
+            KEY_FILE=""
         fi
-        SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
-        SUB_CERT_FILE="$CERT_FILE"
-        SUB_KEY_FILE="$KEY_FILE"
+        PRESERVE_SUB_TLS=1
+        SUB_DOMAIN="$SAVED_SUB_DOMAIN"
+        SUB_CERT_FILE="$SAVED_SUB_CERT"
+        SUB_KEY_FILE="$SAVED_SUB_KEY"
     fi
 
     # Auto-issue SSL certificates for all candidate domains from DB and .env
@@ -1750,12 +1779,12 @@ else
             KEY_FILE=""
         fi
 
-        if [ -n "$XUI_SUB_DOMAIN" ] && [ "$XUI_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
-            SUB_DOMAIN="$XUI_SUB_DOMAIN"
-            SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/fullchain.pem}"
-            SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-/etc/letsencrypt/live/${XUI_SUB_DOMAIN}/privkey.pem}"
+        if [ -n "$REQUESTED_SUB_DOMAIN" ] && [ "$REQUESTED_SUB_DOMAIN" != "$XUI_DOMAIN" ]; then
+            SUB_DOMAIN="$REQUESTED_SUB_DOMAIN"
+            SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-/etc/letsencrypt/live/${REQUESTED_SUB_DOMAIN}/fullchain.pem}"
+            SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-/etc/letsencrypt/live/${REQUESTED_SUB_DOMAIN}/privkey.pem}"
         else
-            SUB_DOMAIN="${XUI_SUB_DOMAIN:-$XUI_DOMAIN}"
+            SUB_DOMAIN="${REQUESTED_SUB_DOMAIN:-$XUI_DOMAIN}"
             SUB_CERT_FILE="${XUI_SUB_CERT_FILE:-$CERT_FILE}"
             SUB_KEY_FILE="${XUI_SUB_KEY_FILE:-$KEY_FILE}"
         fi
@@ -1767,11 +1796,33 @@ else
     fi
 fi
 
+# A failed certificate request must not destroy settings kept by the panel's
+# restore operation. Missing files are reported, not "repaired" by clearing URLs.
+if { [ -z "$CERT_FILE" ] || [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; } &&
+   [ -n "$DB_DOMAIN$SAVED_WEB_CERT$SAVED_WEB_KEY" ]; then
+    PRESERVE_WEB_TLS=1
+    XUI_DOMAIN="$DB_DOMAIN"
+    CERT_FILE="$SAVED_WEB_CERT"
+    KEY_FILE="$SAVED_WEB_KEY"
+    echo "[KEEP] Stored panel TLS retained; provision the certificate files if they are missing"
+fi
+if [ -z "$SUB_CERT_FILE" ] || [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; then
+    if [ -n "$REQUESTED_SUB_DOMAIN" ] || [ "$PRESERVE_SUB_TLS" -eq 1 ]; then
+        PRESERVE_SUB_TLS=1
+        SUB_DOMAIN="$SAVED_SUB_DOMAIN"
+        SUB_CERT_FILE="$SAVED_SUB_CERT"
+        SUB_KEY_FILE="$SAVED_SUB_KEY"
+        if [ -z "$SUB_CERT_FILE" ] || [ ! -f "$SUB_CERT_FILE" ] || [ ! -f "$SUB_KEY_FILE" ]; then
+            SUB_TLS_UNAVAILABLE=1
+        fi
+    fi
+fi
+
 # ============================================================================
 # HTTP fallback if no SSL domain
 # ============================================================================
 
-if [ -z "$CERT_FILE" ] || [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
+if [ "$PRESERVE_WEB_TLS" -eq 0 ] && { [ -z "$CERT_FILE" ] || [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; }; then
     if [ "$XUI_ALLOW_HTTP" = "true" ]; then
         echo "[HTTP] HTTP mode enabled via XUI_ALLOW_HTTP=true"
         set_always "webCertFile" ""
@@ -1837,11 +1888,7 @@ fi
 
 set_always "webPort" "$XUI_PORT"
 
-if [ -n "$fallback_web_cert" ] && [ "$CERT_FILE" = "$fallback_web_cert" ]; then
-    effective_domain=""
-else
-    effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
-fi
+effective_domain="${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}"
 if [ -n "$effective_domain" ]; then
     set_always "webDomain" "$effective_domain"
 else
@@ -1867,7 +1914,12 @@ fi
 set_always "webBasePath" "$XUI_BASE_PATH"
 
 # Subscription / Подписка
-set_always "subEnable" "$XUI_SUB_ENABLE"
+if [ "$SUB_TLS_UNAVAILABLE" -eq 1 ] && [ "${XUI_ALLOW_HTTP:-false}" != "true" ]; then
+    set_always "subEnable" "false"
+    echo "[SUB-DOMAIN] Subscription disabled until TLS is provisioned; no automatic HTTP downgrade"
+else
+    set_always "subEnable" "$XUI_SUB_ENABLE"
+fi
 set_always "subPort" "$XUI_SUB_PORT"
 set_always "subPath" "$XUI_SUB_PATH"
 
@@ -1910,10 +1962,13 @@ fi
 # Inbound TLS certificates are stored separately in inbounds.stream_settings.
 # Keep them in sync only when the saved certificate path is broken.
 effective_domain="${FINAL_DOMAIN:-${XUI_DOMAIN:-${ENV_DOMAIN:-$DB_DOMAIN}}}"
-sync_inbound_tls_certs "$effective_domain" "$CERT_FILE" "$KEY_FILE"
-
-# Sync HAProxy SNI routing on port 443 and hosts table for subscriptions
-sync_haproxy_and_hosts "$effective_domain"
+if [ "$PRESERVE_WEB_TLS" -eq 1 ] && [ "${XUI_SELFSTEAL_MODE:-legacy}" = "legacy" ]; then
+    echo "[KEEP] Panel certificate transition is pending; inbound certificate/Hosts sync skipped"
+else
+    sync_inbound_tls_certs "$effective_domain" "$CERT_FILE" "$KEY_FILE"
+    # Sync HAProxy SNI routing and hosts only when their domain is ready.
+    sync_haproxy_and_hosts "$effective_domain"
+fi
 
 # Session / Сессия
 set_always "sessionMaxAge" "$XUI_SESSION_TIMEOUT"
