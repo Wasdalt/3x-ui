@@ -3,8 +3,10 @@
 import hashlib
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -132,6 +134,108 @@ class RealityRouteTests(unittest.TestCase):
             before = hashlib.sha256(self.db.read_bytes()).hexdigest()
             self.assertEqual(self.load()[0].inbound_id, 1)
             self.assertEqual(hashlib.sha256(self.db.read_bytes()).hexdigest(), before)
+
+    def test_auto_selects_only_prepared_active_local_http_profiles(self):
+        self.add(1, network="xhttp", path="/upload")
+        self.add(2, network="grpc", path="service", listen="::1", port=12002)
+        self.add(3, enabled=0)
+        self.add(4, listen="0.0.0.0")
+        self.add(5, listen="")
+        self.add(6, security="reality")
+        self.add(7, security="tls")
+        self.add(8, protocol="mixed")
+        self.add(9, network="tcp")
+        self.add(10, stream={"network": "ws", "wsSettings": {"path": "/implicit"}})
+        before = self.db.read_bytes()
+        routes = load_routes(self.db, [], 10444, auto=True)
+        self.assertEqual([route.inbound_id for route in routes], [1, 2])
+        self.assertEqual(routes[1].upstream, "[::1]:12002")
+        self.assertEqual(self.db.read_bytes(), before)
+
+    def test_auto_skips_profiles_belonging_to_remote_nodes(self):
+        self.add(1)
+        self.add(2, path="/remote")
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("ALTER TABLE inbounds ADD COLUMN node_id INTEGER")
+            conn.execute("UPDATE inbounds SET node_id=7 WHERE id=2")
+        self.assertEqual([r.inbound_id for r in load_routes(self.db, [], 10444, auto=True)], [1])
+
+    def test_auto_requires_existing_database_and_never_creates_one(self):
+        missing = self.db.parent / "missing.db"
+        with self.assertRaises(RouteError):
+            load_routes(missing, [], 10444, auto=True)
+        self.assertFalse(missing.exists())
+        self.assertEqual(load_routes(self.db, [], 10444, auto=True), [])
+        with self.assertRaises(RouteError):
+            load_routes(self.db, [1], 10444, auto=True)
+
+    def test_auto_rejects_conflicts_instead_of_picking_first_profile(self):
+        self.add(1, path="/api")
+        self.add(2, network="xhttp", path="/api/update")
+        before = self.db.read_bytes()
+        with self.assertRaises(RouteError):
+            load_routes(self.db, [], 10444, auto=True)
+        self.assertEqual(self.db.read_bytes(), before)
+
+    def test_auto_does_not_repair_invalid_candidate_paths_or_ports(self):
+        for index, options in enumerate(({"path": "/"}, {"port": 10444}, {"port": 443}), 1):
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                conn.execute("DELETE FROM inbounds")
+            self.add(index, **options)
+            before = self.db.read_bytes()
+            with self.assertRaises(RouteError):
+                load_routes(self.db, [], 10444, auto=True)
+            self.assertEqual(self.db.read_bytes(), before)
+
+    def test_auto_rejects_malformed_active_local_stream_without_secret_output(self):
+        self.add()
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE inbounds SET stream_settings='secret malformed JSON'")
+        with self.assertRaises(RouteError) as error:
+            load_routes(self.db, [], 10444, auto=True)
+        self.assertNotIn("secret", str(error.exception))
+
+    def test_auto_reads_committed_wal_changes(self):
+        with closing(sqlite3.connect(self.db)) as writer, writer:
+            writer.execute("PRAGMA journal_mode=WAL")
+            self.add()
+            self.assertEqual([r.inbound_id for r in load_routes(self.db, [], 10444, auto=True)], [1])
+
+    def test_auto_cli_and_shell_integration_without_services(self):
+        self.add(30, network="xhttp", path="/upload", port=2087)
+        root = Path(__file__).resolve().parents[1]
+        env = {k: v for k, v in os.environ.items() if not k.startswith("XUI_")}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        before = self.db.read_bytes()
+        result = subprocess.run([sys.executable, "-B", str(root / "decoy/reality_routes.py"),
+                                 "--db", str(self.db), "--ids", "auto", "--backend-port", "10444"],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# inbound 30:", result.stdout)
+        empty = self.db.parent / "empty.env"
+        empty.touch()
+        cert, key = self.db.parent / "cert.pem", self.db.parent / "key.pem"
+        cert.touch()
+        key.touch()
+        env.update(XUI_ENV_FILE=str(empty), XUI_SELFSTEAL_MODE="reality", XUI_SELFSTEAL_ENABLE="true",
+                   XUI_SELFSTEAL_DOMAIN="edge.example.com", XUI_SELFSTEAL_EXTRA_DOMAINS="",
+                   XUI_SELFSTEAL_CERT_FILE=str(cert), XUI_SELFSTEAL_KEY_FILE=str(key),
+                   XUI_SELFSTEAL_PROXY_INBOUNDS="auto", XUI_DB_PATH=str(self.db))
+        body = '''source "$1"
+openssl() { return 0; }
+nginx() { return 0; }
+curl() { echo UNEXPECTED-NETWORK >&2; return 99; }
+systemctl() { echo UNEXPECTED-SERVICE >&2; return 99; }
+certbot() { echo UNEXPECTED-CA >&2; return 99; }
+validate_reality_config
+printf '%s' "$REALITY_PROXY_LOCATIONS"
+'''
+        result = subprocess.run(["bash", "-c", body, "test", str(root / "decoy-setup.sh")],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("# inbound 30:", result.stdout)
+        self.assertNotIn("UNEXPECTED", result.stderr)
+        self.assertEqual(self.db.read_bytes(), before)
 
 
 if __name__ == "__main__":
