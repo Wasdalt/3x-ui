@@ -786,24 +786,6 @@ WHERE enable = 1
 
 
 
-    # Fix Vision TCP TLS inbounds having invalid h2/h3 ALPN
-    sqlite_db "
-UPDATE inbounds
-SET stream_settings = json_set(stream_settings, '$.tlsSettings.alpn', json('[\"http/1.1\"]'))
-WHERE enable = 1
-  AND json_valid(stream_settings)
-  AND json_valid(settings)
-  AND json_extract(stream_settings, '$.network') = 'tcp'
-  AND json_extract(stream_settings, '$.security') = 'tls'
-  AND EXISTS (
-    SELECT 1 FROM json_each(settings, '$.clients')
-    WHERE json_extract(value, '$.flow') = 'xtls-rprx-vision'
-  )
-  AND (
-    stream_settings LIKE '%\"h2\"%' OR stream_settings LIKE '%\"h3\"%'
-  );
-" 2>/dev/null || true
-
     # Fix Reality inbounds with empty minClientVer causing Xray v26 client version rejection
     sqlite_db "
 UPDATE inbounds
@@ -1148,6 +1130,13 @@ EOF_BK_CERTBOT
     fi
 
     # 5. Synchronize hosts table (nodes for subscriptions)
+    # Hosts are client profiles, not a mirror of the server stream settings.
+    # Preserve every manually configured field unless synchronization is opted in.
+    hosts_sync=0
+    case "${XUI_HOSTS_SYNC:-false}" in
+        true|TRUE|1|yes|YES|on|ON) hosts_sync=1 ;;
+    esac
+    if [ "$hosts_sync" -eq 1 ]; then
     echo "[HOSTS] Synchronizing hosts table for domain: ${target_domain}..."
     now_ms=$(date +%s%3N 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 
@@ -1176,8 +1165,7 @@ EOF_BK_CERTBOT
     # Ensure all active inbounds have accurate, synchronized host entries for subscriptions
     all_inbounds=$(sqlite_db -separator '|' "
 SELECT id, port, remark, protocol,
-       replace(replace(stream_settings, char(10), ''), char(13), ''),
-       CASE WHEN (settings LIKE '%xtls-rprx-vision%' OR stream_settings LIKE '%xtls-rprx-vision%') THEN 1 ELSE 0 END
+       replace(replace(stream_settings, char(10), ''), char(13), '')
 FROM inbounds
 WHERE enable = 1
 ORDER BY id ASC;
@@ -1185,7 +1173,7 @@ ORDER BY id ASC;
 
     if [ -n "$all_inbounds" ]; then
         order=1
-        printf "%s\n" "$all_inbounds" | while IFS='|' read -r id port remark proto stream has_vision; do
+        printf "%s\n" "$all_inbounds" | while IFS='|' read -r id port remark proto stream; do
             [ -n "$id" ] || continue
             
             # Transport network (tcp, ws, xhttp, splithttp, grpc, http, upgrade)
@@ -1264,11 +1252,6 @@ ORDER BY id ASC;
                     ;;
             esac
             [ "$fp" = "null" ] || [ "$fp" = "none" ] && fp=""
-            if [ "$sec" = "reality" ] || [ "$sec" = "tls" ]; then
-                [ -z "$fp" ] && fp="firefox"
-            else
-                fp=""
-            fi
 
             # 4. ALPN extraction:
             alpn="[]"
@@ -1281,11 +1264,6 @@ ORDER BY id ASC;
                     ;;
             esac
             [ -z "$alpn" ] || [ "$alpn" = "null" ] && alpn="[]"
-            if [ "$alpn" = "[]" ] && [ "$has_vision" -eq 1 ]; then
-                alpn='["http/1.1"]'
-            elif [ "$alpn" = "[]" ] && [ "$net" = "grpc" ]; then
-                alpn='["h2"]'
-            fi
 
             # 5. Check if host entry already exists for this inbound
             existing_host=$(sqlite_db -separator '|' "SELECT id, address, port, COALESCE(is_disabled, 0) FROM hosts WHERE inbound_id = ${id} LIMIT 1;" 2>/dev/null || echo "")
@@ -1362,6 +1340,8 @@ ORDER BY id ASC;
             esc_sec=$(sqlite_escape "$host_sec")
             esc_path=$(sqlite_escape "$in_path")
             esc_host=$(sqlite_escape "$in_host")
+            esc_fp=$(sqlite_escape "$fp")
+            esc_alpn=$(sqlite_escape "$alpn")
 
             # Determine if SNI belongs to our managed domain
             sni_is_ours=0
@@ -1415,8 +1395,8 @@ SET address = '${esc_host_addr}',
     sni = '${esc_sni}',
     security = '${esc_sec}',
     remark = '${esc_remark}',
-    fingerprint = '${fp}',
-    alpn = '${alpn}',
+    fingerprint = '${esc_fp}',
+    alpn = '${esc_alpn}',
     path = '${esc_path}',
     host_header = '${esc_host}',
     updated_at = ${now_ms}
@@ -1451,8 +1431,8 @@ INSERT INTO hosts (
 ) VALUES (
     '${group_id}', ${id}, ${order}, '${esc_remark}', '',
     0, 0, '', '${esc_host_addr}', ${target_port},
-    '${esc_sec}', '${esc_sni}', '${esc_host}', '${esc_path}', '${alpn}',
-    '${fp}', 0, 0,
+    '${esc_sec}', '${esc_sni}', '${esc_host}', '${esc_path}', '${esc_alpn}',
+    '${esc_fp}', 0, 0,
     '[]', '', 0,
     '', '', '', '',
     '', '', '', 0,
@@ -1477,6 +1457,9 @@ AND sni IN (
 );
 " 2>/dev/null || true
         fi
+    fi
+    else
+        echo "[HOSTS] Automatic synchronization disabled; preserving manual Hosts (XUI_HOSTS_SYNC=false)"
     fi
 
     # 6. Clean legacy externalProxy from inbounds.stream_settings
