@@ -246,6 +246,9 @@ if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
     chmod +x "${XUI_DIR}/decoy-setup.sh"
     echo -e "${green}  ✓ decoy-setup.sh скопирован в ${XUI_DIR}/${plain}"
 fi
+cp -f "${SCRIPT_DIR}/hosts-tls-inherit.sh" "${XUI_DIR}/hosts-tls-inherit.sh"
+cp -f "${SCRIPT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
+chmod +x "${XUI_DIR}/hosts-tls-inherit.sh"
 mkdir -p "${XUI_DIR}/xray-logs"
 echo -e "${green}  ✓ init-config.sh скопирован в ${XUI_DIR}/${plain}"
 
@@ -424,6 +427,7 @@ fi
 echo ""
 systemctl restart x-ui
 sleep 2
+bash "${XUI_DIR}/hosts-tls-inherit.sh" install
 
 haproxy_enable_val="false"
 if [ -f "${XUI_CONFIG_DIR}/.env" ]; then

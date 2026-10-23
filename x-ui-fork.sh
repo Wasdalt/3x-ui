@@ -170,6 +170,7 @@ Commands:
   restore   Restore database from backup file and apply configuration (optional: [file])
   haproxy   Show HAProxy container/service status, logs and config
   selfsteal Manage decoy / REALITY SelfSteal (status, plan, validate, apply, templates)
+  hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
   url       Print current panel URL from DB
   env       Print active .env path
   policy    Show effective opt-in permissions without applying configuration
@@ -400,6 +401,14 @@ case "${1:-help}" in
             echo -e "${red}decoy-setup.sh не найден в ${PROJECT_DIR} или /usr/local/x-ui${plain}"
             exit 1
         fi
+        ;;
+    hosts-inherit)
+        need_root
+        shift
+        if [ -r "${PROJECT_DIR}/hosts-tls-inherit.sh" ]; then
+            exec bash "${PROJECT_DIR}/hosts-tls-inherit.sh" "$@"
+        fi
+        exec bash /usr/local/x-ui/hosts-tls-inherit.sh "$@"
         ;;
     policy)
         (

@@ -39,6 +39,10 @@ sync_shell_file "${PROJECT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
 sync_shell_file "${PROJECT_DIR}/certbot-domain.sh" "${XUI_DIR}/certbot-domain.sh"
 sync_shell_file "${PROJECT_DIR}/fork-db-apply.sh" "${XUI_DIR}/fork-db-apply.sh"
 sync_shell_file "${PROJECT_DIR}/decoy-setup.sh" "${XUI_DIR}/decoy-setup.sh"
+sync_shell_file "${PROJECT_DIR}/hosts-tls-inherit.sh" "${XUI_DIR}/hosts-tls-inherit.sh"
+if [ -f "${PROJECT_DIR}/hosts-tls-inherit.py" ]; then
+    cp -f "${PROJECT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
+fi
 
 if [ -d "${PROJECT_DIR}/decoy" ]; then
     mkdir -p "${XUI_DIR}/decoy"

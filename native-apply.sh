@@ -84,6 +84,9 @@ if [ -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
     chmod +x "${XUI_DIR}/decoy-setup.sh"
     echo -e "${green}  ✓ decoy-setup.sh обновлён${plain}"
 fi
+cp -f "${SCRIPT_DIR}/hosts-tls-inherit.sh" "${XUI_DIR}/hosts-tls-inherit.sh"
+cp -f "${SCRIPT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
+chmod +x "${XUI_DIR}/hosts-tls-inherit.sh"
 
 if [ -f "${SCRIPT_DIR}/.env" ]; then
     ln -sf "${SCRIPT_DIR}/.env" "$XUI_ENV_FILE"
@@ -185,6 +188,9 @@ if [ -f "$XUI_ENV_FILE" ]; then
 fi
 
 export XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
+
+# This worker is independent of the full DB-apply watcher and never restarts Xray.
+bash "${XUI_DIR}/hosts-tls-inherit.sh" install
 
 # Keep existing nginx sites and services unless explicitly delegated to the fork.
 if fork_allow XUI_MANAGE_SYSTEM_NGINX "Остановка/отключение системного nginx" && command -v systemctl >/dev/null 2>&1; then
