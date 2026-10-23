@@ -17,6 +17,7 @@ if [ -f "$ENV_FILE" ]; then
     . "$ENV_FILE"
     set +a
 fi
+. "${SCRIPT_DIR}/fork-policy.sh"
 
 DECOY_ROOT="${SCRIPT_DIR}/decoy"
 [ -d "$DECOY_ROOT" ] || DECOY_ROOT="${XUI_DIR}/decoy"
@@ -55,7 +56,7 @@ validate_reality_config() {
             echo "[SELFSTEAL-ERROR] Режим reality требует XUI_HAPROXY_ENABLE=false" >&2
             return 1 ;;
     esac
-    case "${XUI_SELFSTEAL_ENABLE:-true}" in
+    case "${XUI_SELFSTEAL_ENABLE:-false}" in
         true|TRUE|1|yes|YES|on|ON) ;;
         *) echo "[SELFSTEAL-ERROR] Режим reality требует XUI_SELFSTEAL_ENABLE=true" >&2; return 1 ;;
     esac
@@ -412,7 +413,8 @@ resolve_ssl_certs() {
         done
     fi
 
-    if [ -z "$cert" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "localhost" ]; then
+    if [ -z "$cert" ] && [ -n "$target_domain" ] && [ "$target_domain" != "127.0.0.1" ] && [ "$target_domain" != "localhost" ] &&
+       fork_allow XUI_AUTO_CERTS "Выпуск сертификата сайта-заглушки ${target_domain}"; then
         cand_cert="/etc/letsencrypt/live/${target_domain}/fullchain.pem"
         cand_key="/etc/letsencrypt/live/${target_domain}/privkey.pem"
         if command -v certbot_issue_domain_cert >/dev/null 2>&1 || [ -f "${SCRIPT_DIR}/certbot-domain.sh" ] || [ -f "${XUI_DIR}/certbot-domain.sh" ]; then
@@ -440,8 +442,13 @@ resolve_ssl_certs() {
         fi
     fi
 
+    if [ -z "$cert" ] && ! fork_allow XUI_SELFSTEAL_ALLOW_FALLBACK_CERT "Подмена сертификата заглушки другим/самоподписанным"; then
+        echo "[DECOY-ERROR] Нет сертификата выбранного домена; чужой или самоподписанный не подставляется" >&2
+        return 1
+    fi
+
     if [ -z "$cert" ]; then
-        # Find any available Let's Encrypt certificate
+        # Only an explicit fallback permission may select a different identity.
         for ldir in /etc/letsencrypt/live/*; do
             [ -d "$ldir" ] || continue
             case "$(basename "$ldir")" in
@@ -492,13 +499,14 @@ resolve_ssl_certs() {
 }
 
 generate_nginx_conf() {
-    ssl_info=$(resolve_ssl_certs)
+    ssl_info=$(resolve_ssl_certs) || return 1
     cert=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f1 | tr -d '\r\n')
     key=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f2 | tr -d '\r\n')
     target_domain=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f3 | tr -d '\r\n')
 
     # Double check cert validity
     if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
+        fork_allow XUI_SELFSTEAL_ALLOW_FALLBACK_CERT "Создание самоподписанного сертификата заглушки" || return 1
         mkdir -p "/etc/x-ui"
         cert="/etc/x-ui/fallback-inbound.crt"
         key="/etc/x-ui/fallback-inbound.key"
@@ -518,9 +526,13 @@ generate_nginx_conf() {
 
     # Detect if Nginx should bind to public port 443
     is_public_443=0
-    case "${XUI_SELFSTEAL_PUBLIC:-true}" in
+    case "${XUI_SELFSTEAL_PUBLIC:-false}" in
         true|TRUE|1|yes|YES) is_public_443=1 ;;
     esac
+    if [ "$SELFSTEAL_PORT" = "443" ] && [ "$is_public_443" -eq 0 ]; then
+        echo "[DECOY-ERROR] Публичный порт 443 требует явного XUI_SELFSTEAL_PUBLIC=true" >&2
+        return 1
+    fi
 
     # Detect nginx version for http2 syntax compatibility
     bin_to_check="${nginx_bin:-$(command -v nginx || true)}"
@@ -740,6 +752,20 @@ ${web_proxy_loc}
         fi
     done
 
+    nginx_http_server=""
+    if [ "$is_public_443" -eq 1 ]; then
+        nginx_http_server='    server {
+        listen 80;
+        server_name _;
+        location /.well-known/acme-challenge/ {
+            root /var/www/html;
+            try_files $uri =404;
+        }
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }'
+    fi
     mkdir -p "$(dirname "$NGINX_CONF")"
     cat > "$NGINX_CONF" <<EOF
 user root;
@@ -767,17 +793,7 @@ http {
         '' close;
     }
 
-    server {
-        listen 80;
-        server_name _;
-        location /.well-known/acme-challenge/ {
-            root /var/www/html;
-            try_files \$uri =404;
-        }
-        location / {
-            return 301 https://\$host\$request_uri;
-        }
-    }
+${nginx_http_server}
 
     server {
         ${nginx_http2_listen}
@@ -852,7 +868,7 @@ setup_and_start_service() {
 
     if [ -f "/.dockerenv" ] || ( [ -z "$(command -v systemctl 2>/dev/null)" ] && command -v docker >/dev/null 2>&1 ); then
         echo "[DECOY] Configuring Docker container 3x-decoy..."
-        generate_nginx_conf
+        generate_nginx_conf || return 1
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-decoy$"; then
             docker restart 3x-decoy >/dev/null 2>&1 || true
         elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^3x-decoy$"; then
@@ -889,7 +905,7 @@ setup_and_start_service() {
     python_bin=$(command -v python3 || echo "/usr/bin/python3")
 
     if [ -n "$nginx_bin" ] && [ -x "$nginx_bin" ]; then
-        generate_nginx_conf
+        generate_nginx_conf || return 1
         cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=3x-ui SelfSteal Decoy Web Server (Nginx)
@@ -918,7 +934,7 @@ EOF
             journalctl -u x-ui-decoy.service -n 10 --no-pager || true
         fi
     elif [ -n "$python_bin" ] && [ -x "$python_bin" ] && [ -f "${DECOY_ROOT}/decoy-server.py" ]; then
-        ssl_info=$(resolve_ssl_certs)
+        ssl_info=$(resolve_ssl_certs) || return 1
         cert=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f1 | tr -d '\r\n')
         key=$(echo "$ssl_info" | tail -n 1 | cut -d'|' -f2 | tr -d '\r\n')
 

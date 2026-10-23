@@ -89,6 +89,7 @@ openssl() {{ return 1; }}
         self.assertNotIn("systemctl:start", calls)
 
     def test_only_active_owner_is_restored_after_failure(self):
+        self.env["XUI_CERTBOT_STOP_WEB_SERVER"] = "true"
         result = self.run_helper("nginx.service", certbot_result=1)
         self.assertNotEqual(result.returncode, 0)
         calls = self.calls.read_text()
@@ -99,10 +100,18 @@ openssl() {{ return 1; }}
         self.assertFalse((self.base / "stopped").exists())
 
     def test_active_owner_is_restored_after_success(self):
+        self.env["XUI_CERTBOT_STOP_WEB_SERVER"] = "true"
         result = self.run_helper("nginx.service")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("systemctl:start nginx.service", self.calls.read_text())
         self.assertFalse((self.base / "stopped").exists())
+
+    def test_system_web_server_is_not_stopped_without_explicit_permission(self):
+        result = self.run_helper("nginx.service")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("XUI_CERTBOT_STOP_WEB_SERVER", result.stdout)
+        self.assertNotIn("systemctl:stop", self.calls.read_text())
+        self.assertNotIn("certbot:", self.calls.read_text())
 
     def test_unknown_listener_is_not_killed(self):
         # A PID is visible, but none of the managed units owns it.
@@ -171,6 +180,7 @@ class PanelPreservationTests(unittest.TestCase):
         script = f'''
 set -e
 DB_PATH="$1"
+. "{ROOT / 'fork-policy.sh'}"
 sqlite_escape() {{ printf '%s' "$1" | sed "s/'/''/g"; }}
 sqlite_db() {{ sqlite3 "$DB_PATH" "$@"; }}
 {functions}

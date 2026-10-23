@@ -16,13 +16,27 @@ DEBOUNCE_FILE="/run/x-ui-fork-db-apply.last"
 WEB_SUB_SIG_FILE="/run/x-ui-fork-web-sub.sig"
 DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
 
-[ -f "$DB_PATH" ] || exit 0
-command -v sqlite3 >/dev/null 2>&1 || exit 0
-
 force_mode=0
-if [ "$1" = "--force" ] || [ "$1" = "-f" ]; then
+if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then
     force_mode=1
 fi
+
+if [ -f "$XUI_ENV_FILE" ]; then
+    set -a
+    . "$XUI_ENV_FILE"
+    set +a
+fi
+POLICY_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+[ -r "${POLICY_DIR}/fork-policy.sh" ] || { echo "[ERROR] fork-policy.sh отсутствует" >&2; exit 1; }
+. "${POLICY_DIR}/fork-policy.sh"
+if [ "$force_mode" -eq 0 ]; then
+    fork_allow XUI_AUTO_DB_APPLY "Фоновое применение настроек после изменения БД" || exit 0
+else
+    echo "[ALLOW] Применение БД запрошено явно через --force"
+fi
+DB_PATH="${XUI_DB_PATH:-${XUI_CONFIG_DIR}/x-ui.db}"
+[ -f "$DB_PATH" ] || exit 0
+command -v sqlite3 >/dev/null 2>&1 || exit 0
 
 if [ -x "${XUI_DIR}/fork-sync.sh" ]; then
     "${XUI_DIR}/fork-sync.sh" || true

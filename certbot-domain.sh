@@ -160,6 +160,14 @@ certbot_issue_domain_cert() (
             set -- "$@" --standalone --http-01-port 80
             ;;
         *)
+            case "${XUI_CERTBOT_STOP_WEB_SERVER:-false}" in
+                true|TRUE|1|yes|YES|on|ON) ;;
+                *)
+                    echo "[SKIP] ACME не останавливает ${owner}: требуется XUI_CERTBOT_STOP_WEB_SERVER=true либо настройка webroot/DNS-01"
+                    printf '%s\n' "$now" > "$failure_file"
+                    return 1
+                    ;;
+            esac
             echo "[CERT] Temporarily stopping port-80 owner ${owner}"
             stopped_service="$owner"
             systemctl stop "$owner" || return 1

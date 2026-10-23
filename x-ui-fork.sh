@@ -56,7 +56,7 @@ resolve_project_dir() {
 }
 
 PROJECT_DIR=$(resolve_project_dir)
-if [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply.sh" ]; then
+if [ "${1:-help}" != "policy" ] && [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply.sh" ]; then
     mkdir -p "/etc/x-ui"
     echo "$PROJECT_DIR" > "$PROJECT_DIR_FILE" 2>/dev/null || true
 fi
@@ -172,6 +172,7 @@ Commands:
   selfsteal Manage decoy / REALITY SelfSteal (status, plan, validate, apply, templates)
   url       Print current panel URL from DB
   env       Print active .env path
+  policy    Show effective opt-in permissions without applying configuration
   help      Show this help
 EOF
 }
@@ -223,14 +224,10 @@ case "${1:-help}" in
         ;;
     restart)
         need_root
+        echo "[ACTION] Перезапуск x-ui запрошен пользователем; ExecStartPre применяет разрешённые настройки"
         systemctl restart x-ui
-        if systemctl is-active --quiet haproxy 2>/dev/null; then
-            systemctl restart haproxy 2>/dev/null || true
-        fi
-        if systemctl is-active --quiet x-ui-decoy 2>/dev/null; then
-            systemctl restart x-ui-decoy 2>/dev/null || true
-        fi
-        echo -e "${green}x-ui, haproxy и x-ui-decoy перезапущены${plain}"
+        echo -e "${green}[OK] x-ui перезапущен${plain}"
+        echo "[KEEP] CLI не перезапускает другие службы отдельно; действия ExecStartPre видны в журнале"
         ;;
     status)
         need_root
@@ -403,6 +400,19 @@ case "${1:-help}" in
             echo -e "${red}decoy-setup.sh не найден в ${PROJECT_DIR} или /usr/local/x-ui${plain}"
             exit 1
         fi
+        ;;
+    policy)
+        (
+            env_file="${XUI_ENV_FILE:-/etc/x-ui/.env}"
+            [ -r "$env_file" ] || env_file="${PROJECT_DIR}/.env"
+            if [ -r "$env_file" ]; then
+                set -a
+                . "$env_file"
+                set +a
+            fi
+            . "${PROJECT_DIR}/fork-policy.sh"
+            fork_policy_report
+        )
         ;;
     env)
         echo "/etc/x-ui/.env -> ${PROJECT_DIR}/.env"

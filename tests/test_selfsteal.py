@@ -73,6 +73,7 @@ class SelfStealTests(unittest.TestCase):
             if key.startswith("XUI_"):
                 del env[key]
         env.update(XUI_ENV_FILE=str(self.env_file), XUI_SELFSTEAL_MODE="reality",
+                   XUI_SELFSTEAL_ENABLE="true",
                    XUI_SELFSTEAL_DOMAIN="edge.example.com", XUI_HAPROXY_ENABLE="false",
                    XUI_SELFSTEAL_PUBLIC="false", XUI_SELFSTEAL_CERT_FILE=str(self.cert),
                    XUI_SELFSTEAL_KEY_FILE=str(self.key), SSL_CERT_FILE=str(self.ca),
@@ -179,6 +180,33 @@ if setup_reality_service; then exit 99; fi
                             XUI_DB_PATH=str(self.base / "missing-panel.db"))
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.base / "missing-panel.db").exists())
+
+    def test_legacy_private_backend_does_not_bind_public_80_or_443(self):
+        with tempfile.TemporaryDirectory(prefix="legacy-", dir=self.base) as tmp:
+            conf = Path(tmp) / "nginx.conf"
+            body = f'''
+NGINX_CONF="{conf}"
+resolve_ssl_certs() {{ printf '%s|%s|edge.example.com\\n' "{self.cert}" "{self.key}"; }}
+generate_nginx_conf
+'''
+            result = self.shell(body, XUI_SELFSTEAL_MODE="legacy")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = conf.read_text()
+            self.assertNotIn("listen 80;", text)
+            self.assertNotIn("listen 443 ", text)
+            self.assertIn("listen 127.0.0.1:10444", text)
+
+    def test_legacy_port_443_requires_explicit_public_permission(self):
+        with tempfile.TemporaryDirectory(prefix="legacy-public-", dir=self.base) as tmp:
+            conf = Path(tmp) / "nginx.conf"
+            body = f'''
+NGINX_CONF="{conf}"
+resolve_ssl_certs() {{ printf '%s|%s|edge.example.com\\n' "{self.cert}" "{self.key}"; }}
+generate_nginx_conf
+'''
+            result = self.shell(body, XUI_SELFSTEAL_MODE="legacy", XUI_SELFSTEAL_PORT="443")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(conf.exists())
 
     def test_reality_mode_skips_legacy_database_and_host_sync(self):
         source = (ROOT / "init-config.sh").read_text()

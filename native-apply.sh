@@ -20,6 +20,17 @@ XUI_BUNDLED_SERVICE="${XUI_DIR}/x-ui.service"
 XUI_FORK_CLI="/usr/bin/x-ui-fork"
 XUI_FORK_PROJECT_FILE="${XUI_CONFIG_DIR}/fork-project-dir"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/fork-policy.sh"
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    set -a
+    . "${SCRIPT_DIR}/.env"
+    set +a
+elif [ -f "$XUI_ENV_FILE" ]; then
+    set -a
+    . "$XUI_ENV_FILE"
+    set +a
+fi
+fork_policy_report
 
 echo -e "${green}============================================================================${plain}"
 echo -e "${green}  Applying 3x-ui fork overlay${plain}"
@@ -33,6 +44,7 @@ fi
 mkdir -p "$XUI_CONFIG_DIR" "${XUI_DIR}/xray-logs"
 
 cp -f "${SCRIPT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
+cp -f "${SCRIPT_DIR}/fork-policy.sh" "${XUI_DIR}/fork-policy.sh"
 chmod +x "${XUI_DIR}/init-config.sh"
 echo -e "${green}  ✓ init-config.sh обновлён${plain}"
 
@@ -158,8 +170,11 @@ EOF
 
     systemctl daemon-reload
     systemctl reset-failed x-ui-fork-db-apply.service x-ui-fork-db-apply.path >/dev/null 2>&1 || true
-    systemctl restart x-ui-fork-db-apply.path >/dev/null 2>&1 || systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
-    echo -e "${green}  ✓ DB apply path enabled${plain}"
+    if fork_allow XUI_AUTO_DB_APPLY "Запуск фонового наблюдателя БД"; then
+        systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
+    else
+        systemctl disable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
+    fi
 fi
 
 if [ -f "$XUI_ENV_FILE" ]; then
@@ -171,9 +186,8 @@ fi
 
 export XUI_XRAY_CONFIG="${XUI_XRAY_CONFIG:-${XUI_DIR}/bin/config.json}"
 
-# Отключаем дефолтный системный nginx на 80 порту, чтобы освободить порт для certbot/haproxy
-rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
-if command -v systemctl >/dev/null 2>&1; then
+# Keep existing nginx sites and services unless explicitly delegated to the fork.
+if fork_allow XUI_MANAGE_SYSTEM_NGINX "Остановка/отключение системного nginx" && command -v systemctl >/dev/null 2>&1; then
     systemctl stop nginx 2>/dev/null || true
     systemctl disable nginx 2>/dev/null || true
 fi
@@ -220,27 +234,18 @@ case "${XUI_HAPROXY_ENABLE:-false}" in
         ;;
     *)
         echo -e "${yellow}  [HAPROXY] ВЫКЛЮЧЕН (XUI_HAPROXY_ENABLE=${XUI_HAPROXY_ENABLE:-false})${plain}"
-        echo -e "${green}  ✓ Все инбаунды слушают напрямую на внешних портах 0.0.0.0${plain}"
-        if command -v systemctl >/dev/null 2>&1; then
+        echo -e "${yellow}  [KEEP] Адреса listen сохранены, если XUI_REWRITE_INBOUNDS не разрешён${plain}"
+        if [ -n "${XUI_HAPROXY_ENABLE+x}" ] && command -v systemctl >/dev/null 2>&1; then
             systemctl stop haproxy >/dev/null 2>&1 || true
             systemctl disable haproxy >/dev/null 2>&1 || true
         fi
-        if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+        if [ -n "${XUI_HAPROXY_ENABLE+x}" ] && command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
             docker stop 3x-haproxy >/dev/null 2>&1 || true
         fi
         ;;
 esac
 
-case "${XUI_SELFSTEAL_ENABLE:-true}" in
-    true|TRUE|1|yes|YES|on|ON)
-        systemctl disable --now nginx >/dev/null 2>&1 || true
-        if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
-            echo -e "${yellow}  Настройка SelfSteal Decoy Site...${plain}"
-            "${XUI_DIR}/decoy-setup.sh" apply || true
-            echo -e "${green}  ✓ SelfSteal Decoy Site настроен и запущен${plain}"
-        fi
-        ;;
-esac
+echo "[KEEP] SelfSteal применяется через init-config по разрешениям; отдельного повторного запуска нет"
 
 systemctl restart x-ui
 

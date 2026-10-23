@@ -26,6 +26,14 @@ elif [ -f "${SCRIPT_DIR}/.env" ] && [ -r "${SCRIPT_DIR}/.env" ]; then
     set +a
 fi
 
+if [ ! -r "${SCRIPT_DIR}/fork-policy.sh" ]; then
+    echo "[ERROR] fork-policy.sh отсутствует; обновите всю обвязку до применения" >&2
+    exit 1
+fi
+. "${SCRIPT_DIR}/fork-policy.sh"
+fork_policy_report
+DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
+
 # Fail before database updates, orphan cleanup or service changes when the new
 # opt-in mode is misconfigured. Legacy installations retain their old behavior.
 case "${XUI_SELFSTEAL_MODE:-legacy}" in
@@ -61,7 +69,8 @@ fi
 
 # Terminate any lingering orphaned xray/mtg processes from crashed previous runs to free ports
 # ONLY if x-ui itself is NOT currently running and orphan cleanup is not explicitly skipped
-if [ "${XUI_SKIP_PKILL:-false}" != "true" ]; then
+if fork_allow XUI_CLEANUP_ORPHANS "Завершение предполагаемых осиротевших Xray/MTProto процессов" &&
+   [ "${XUI_SKIP_PKILL:-false}" != "true" ]; then
     is_xui_running() {
         if command -v systemctl >/dev/null 2>&1; then
             systemctl is-active --quiet x-ui 2>/dev/null && return 0
@@ -93,7 +102,7 @@ fi
 echo "Applying environment configuration..."
 
 # Network & TCP stack tuning to prevent hanging / stale TCP sessions
-if command -v sysctl >/dev/null 2>&1; then
+if fork_allow XUI_TUNE_NETWORK "Изменение сетевых параметров ядра" && command -v sysctl >/dev/null 2>&1; then
     sysctl -q -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
     sysctl -q -w net.ipv4.tcp_fin_timeout=15 2>/dev/null || true
     sysctl -q -w net.ipv4.tcp_keepalive_time=300 2>/dev/null || true
@@ -111,11 +120,10 @@ sqlite_db() {
     sqlite3 -cmd ".timeout 15000" "$DB_PATH" "$@"
 }
 
-# Enable WAL mode so x-ui traffic updates and scripts never lock each other
-sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2>&1 || true
-
-# Deduplicate settings table
-sqlite_db "DELETE FROM settings WHERE rowid NOT IN (SELECT MAX(rowid) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
+if fork_allow XUI_DB_MAINTENANCE "Переключение SQLite на WAL и удаление дубликатов settings"; then
+    sqlite_db "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 15000;" >/dev/null 2>&1 || true
+    sqlite_db "DELETE FROM settings WHERE rowid NOT IN (SELECT MAX(rowid) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
+fi
 
 preserve_tls_setting() {
     case "$1" in
@@ -136,12 +144,19 @@ set_always() {
     if [ -n "$value" ]; then
         esc_key=$(sqlite_escape "$key")
         esc_value=$(sqlite_escape "$value")
+        stored_value=$(get_setting_value "$key")
+        if [ "$stored_value" = "$value" ]; then
+            fork_setting_log KEEP "$key" "уже соответствует заданной конфигурации"
+            return 0
+        fi
 
         sqlite_db "
 UPDATE settings SET value = '${esc_value}' WHERE key = '${esc_key}';
 INSERT INTO settings (key, value) SELECT '${esc_key}', '${esc_value}' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
 "
-        echo "[SET] $key = $value"
+        fork_setting_log CHANGE "$key" "${3:-$(fork_setting_reason "$key")}"
+    else
+        fork_setting_log SKIP "$key" "параметр не задан; сохранено значение БД"
     fi
 }
 
@@ -152,12 +167,16 @@ set_empty() {
         return 0
     fi
     esc_key=$(sqlite_escape "$key")
+    if [ -z "$(get_setting_value "$key")" ]; then
+        fork_setting_log KEEP "$key" "значение уже пустое"
+        return 0
+    fi
 
     sqlite_db "
 UPDATE settings SET value = '' WHERE key = '${esc_key}';
 INSERT INTO settings (key, value) SELECT '${esc_key}', '' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
 "
-    echo "[SET] $key = "
+    fork_setting_log CHANGE "$key" "${2:-явное очищение поля конфигурацией}"
 }
 
 set_if_empty() {
@@ -174,7 +193,7 @@ set_if_empty() {
 UPDATE settings SET value = '${esc_value}' WHERE key = '${esc_key}';
 INSERT INTO settings (key, value) SELECT '${esc_key}', '${esc_value}' WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = '${esc_key}');
 "
-            echo "[NEW] $key = $value"
+            fork_setting_log NEW "$key" "${3:-начальная настройка пустого поля БД}"
         fi
     fi
 }
@@ -283,10 +302,13 @@ if [ -n "$XUI_ADMIN_PASSWORD" ]; then
     XUI_BIN=$(find_xui_binary || true)
     if [ -n "$XUI_BIN" ]; then
         # 3x-ui utilizes bcrypt hashing for passwords; use setting CLI to hash correctly
-        "$XUI_BIN" setting -username "$CURRENT_USER" -password "$XUI_ADMIN_PASSWORD" >/dev/null 2>&1 || true
-        echo "[CREDS] Admin credentials set (bcrypt)"
+        if "$XUI_BIN" setting -username "$CURRENT_USER" -password "$XUI_ADMIN_PASSWORD" >/dev/null 2>&1; then
+            echo "[CHANGE] Учётные данные администратора: явный XUI_ADMIN_PASSWORD (значения скрыты)"
+        else
+            echo "[WARN] Не удалось применить XUI_ADMIN_PASSWORD; успех не подтверждён"
+        fi
     elif command -v python3 >/dev/null 2>&1 && python3 -c "import bcrypt" 2>/dev/null; then
-        HASHED_PASS=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$XUI_ADMIN_PASSWORD', bcrypt.gensalt(10)).decode())")
+        HASHED_PASS=$(XUI_PASSWORD_TO_HASH="$XUI_ADMIN_PASSWORD" python3 -c 'import bcrypt,os; print(bcrypt.hashpw(os.environ["XUI_PASSWORD_TO_HASH"].encode(), bcrypt.gensalt(10)).decode())')
         esc_pass=$(sqlite_escape "$HASHED_PASS")
         esc_user=$(sqlite_escape "$CURRENT_USER")
         sqlite_db "UPDATE users SET username='${esc_user}', password='${esc_pass}' WHERE id=1;"
@@ -439,6 +461,9 @@ issue_cert_for_domain() {
 
     [ -n "$domain" ] || return 1
 
+    if ! fork_allow XUI_AUTO_CERTS "Выпуск/перевыпуск сертификата ${domain}"; then
+        return 1
+    fi
     echo "[AUTO-CERT] Issuing certificate for $domain"
 
     if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
@@ -519,13 +544,7 @@ sync_inbound_tls_certs() {
     target_cert_file=$2
     target_key_file=$3
 
-    case "${XUI_SYNC_INBOUND_CERTS:-true}" in
-        true|TRUE|1|yes|YES|on|ON) ;;
-        *)
-            echo "[INBOUND-CERT] Sync disabled"
-            return 0
-            ;;
-    esac
+    fork_allow XUI_SYNC_INBOUND_CERTS "Замена сертификатов TLS-входящих" || return 0
 
     # 1. Resolve target certificate from DB or disk if not provided or missing
     if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
@@ -665,7 +684,7 @@ sync_haproxy_and_hosts() {
     # This mode has explicit frontend/backend ports and manually managed Hosts.
     # Do not run legacy bind/target fixes, forced-443 mappings or externalProxy
     # cleanup: they would overwrite HTTP clients using a non-443 frontend.
-    if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
+            if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
         echo "[SELFSTEAL] Applying local REALITY/HTTPS backend; legacy inbound/Hosts sync skipped"
         bash "${SCRIPT_DIR}/decoy-setup.sh" apply || return 1
         return 0
@@ -694,12 +713,13 @@ sync_haproxy_and_hosts() {
         fi
     else
         echo "[HAPROXY] Статус:    [ ВЫКЛЮЧЕН ] (XUI_HAPROXY_ENABLE=false, Option B)"
-        echo "[HAPROXY] Привязка:  [ 0.0.0.0 ] (все Reality/TLS инбаунды слушают публично)"
-        if command -v systemctl >/dev/null 2>&1; then
+        echo "[HAPROXY] Listen входящих сохраняется; его перезапись требует XUI_REWRITE_INBOUNDS=true"
+        if [ -n "${XUI_HAPROXY_ENABLE+x}" ] && command -v systemctl >/dev/null 2>&1; then
             systemctl stop haproxy >/dev/null 2>&1 || true
             systemctl disable haproxy >/dev/null 2>&1 || true
+            echo "[CHANGE] HAProxy остановлен: явный XUI_HAPROXY_ENABLE=false"
         fi
-        if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
+        if [ -n "${XUI_HAPROXY_ENABLE+x}" ] && command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3x-haproxy$"; then
             docker stop 3x-haproxy >/dev/null 2>&1 || true
         fi
     fi
@@ -724,6 +744,8 @@ sync_haproxy_and_hosts() {
         target_domain="${discovered_ip:-127.0.0.1}"
     fi
 
+    selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
+    if fork_allow XUI_REWRITE_INBOUNDS "Изменение портов, listen, Reality target и внутренних metrics"; then
     sqlite_db "
 UPDATE settings
 SET value = json_set(value, '$.metrics.listen', '127.0.0.1:61111')
@@ -732,7 +754,6 @@ WHERE key = 'xrayTemplateConfig'
   AND json_extract(value, '$.metrics.listen') = '127.0.0.1:11111';
 " >/dev/null 2>&1 || true
 
-    selfsteal_port_safe="${XUI_SELFSTEAL_PORT:-10444}"
     if [ "$haproxy_enabled" -eq 1 ]; then
         inbounds_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable = 1 AND port = 443 AND protocol NOT IN ('hysteria', 'hysteria2', 'tuic', 'wireguard') AND (stream_settings IS NULL OR json_extract(stream_settings, '$.network') != 'kcp');" 2>/dev/null || echo "")
         if [ -n "$inbounds_443" ]; then
@@ -785,19 +806,6 @@ WHERE enable = 1
     fi
 
 
-
-    # Fix Reality inbounds with empty minClientVer causing Xray v26 client version rejection
-    sqlite_db "
-UPDATE inbounds
-SET stream_settings = json_set(stream_settings, '$.realitySettings.minClientVer', '1.0.0')
-WHERE enable = 1
-  AND json_valid(stream_settings)
-  AND json_extract(stream_settings, '$.security') = 'reality'
-  AND (
-    json_extract(stream_settings, '$.realitySettings.minClientVer') IS NULL
-    OR json_extract(stream_settings, '$.realitySettings.minClientVer') = ''
-  );
-" 2>/dev/null || true
 
     # Sanitize invalid domain names in listen: Xray fails to start if listen is a domain name
     sqlite_db "
@@ -860,9 +868,17 @@ WHERE enable = 1
 " 2>/dev/null || true
     fi
 
+    elif [ "$haproxy_enabled" -eq 1 ]; then
+        occupied_443=$(sqlite_db "SELECT id FROM inbounds WHERE enable=1 AND port=443 AND protocol NOT IN ('hysteria','hysteria2','tuic','wireguard') LIMIT 1;" 2>/dev/null || true)
+        if [ -n "$occupied_443" ]; then
+            echo "[ERROR] HAProxy требует TCP443, но он назначен входящему ${occupied_443}. Порты не изменены: настройте вручную или явно разрешите XUI_REWRITE_INBOUNDS=true" >&2
+            return 1
+        fi
+    fi
+
     # SelfSteal Decoy Site integration settings
     selfsteal_enabled=0
-    case "${XUI_SELFSTEAL_ENABLE:-true}" in
+    case "${XUI_SELFSTEAL_ENABLE:-false}" in
         true|TRUE|1|yes|YES|on|ON) selfsteal_enabled=1 ;;
     esac
 
@@ -1125,7 +1141,11 @@ EOF_BK_CERTBOT
         fi
         if [ -n "$decoy_script" ]; then
             echo "[SELFSTEAL] Applying SelfSteal decoy service (${selfsteal_domain} -> port ${selfsteal_port})..."
-            bash "$decoy_script" apply >/dev/null 2>&1 || true
+            if bash "$decoy_script" apply; then
+                echo "[OK] Локальная служба заглушки применена"
+            else
+                fork_warn "Заглушка не применена; изучите ошибку выше. Входящие не считаются проверенными"
+            fi
         fi
     fi
 
@@ -1463,6 +1483,7 @@ AND sni IN (
     fi
 
     # 6. Clean legacy externalProxy from inbounds.stream_settings
+    if fork_allow XUI_REWRITE_INBOUNDS "Удаление legacy externalProxy из входящих"; then
     rows_ext=$(sqlite_db -separator '|' "
 SELECT id, stream_settings
 FROM inbounds
@@ -1479,6 +1500,7 @@ WHERE stream_settings LIKE '%externalProxy%';
                 echo "[HAPROXY] Cleaned legacy externalProxy from inbound id=${ext_id}"
             fi
         done
+    fi
     fi
 }
 
@@ -1601,7 +1623,7 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         echo "[DOMAIN] Certificate paths saved to DB"
 
         # Ensure certificate for XUI_HAPROXY_DOMAIN if set and different
-        if [ -n "$XUI_HAPROXY_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "$FINAL_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "${SUB_DOMAIN:-}" ]; then
+        if fork_policy_enabled XUI_AUTO_CERTS && [ -n "$XUI_HAPROXY_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "$FINAL_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "${SUB_DOMAIN:-}" ]; then
             if command -v is_domain_name >/dev/null 2>&1 && is_domain_name "$XUI_HAPROXY_DOMAIN"; then
                 echo "[DOMAIN] Requesting certificate for HAProxy/SelfSteal domain: $XUI_HAPROXY_DOMAIN"
                 certbot_issue_domain_cert "$XUI_HAPROXY_DOMAIN" "$CERTBOT_EMAIL" || true
@@ -1629,7 +1651,8 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
 
     # Auto-issue SSL certificates for all candidate domains from DB and .env
     # (including Reality SelfSteal domains where target points to local decoy)
-    if command -v certbot_issue_domain_cert >/dev/null 2>&1; then
+    if fork_allow XUI_AUTO_CERT_DOMAINS "Поиск сертификатов для доменов всех входящих/Hosts" &&
+       fork_allow XUI_AUTO_CERTS "Выпуск сертификатов для найденных доменов" && command -v certbot_issue_domain_cert >/dev/null 2>&1; then
         db_tls_doms=$(sqlite_db "
 SELECT json_extract(stream_settings, '$.tlsSettings.serverName')
 FROM inbounds
@@ -1862,7 +1885,7 @@ fi
 if [ -z "$XUI_BASE_PATH" ] && [ -z "$(get_setting_value webBasePath)" ]; then
     GENERATED_BASE_PATH=$(generate_base_path)
     set_if_empty "webBasePath" "$GENERATED_BASE_PATH"
-    echo "[AUTO] Generated panel base path: $GENERATED_BASE_PATH"
+    echo "[NEW] Создан начальный путь панели для пустой БД; значение скрыто"
 fi
 
 # ============================================================================
@@ -2006,6 +2029,11 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
 
             if [ -s "$TMP_JSON" ]; then
                 if ! jq empty "$TMP_JSON" >/dev/null 2>&1; then
+                    if ! fork_allow XUI_REPAIR_XRAY_TEMPLATE "Восстановление повреждённого xrayTemplateConfig из файла"; then
+                        rm -f "$TMP_JSON"
+                        echo "[ERROR] Шаблон Xray в БД повреждён; оставлен без изменений" >&2
+                        return 1
+                    fi
                     echo "[WARN] Invalid xrayTemplateConfig in DB, rebuilding from config.json"
 
                     TMP_ESCAPED=$(mktemp)
@@ -2034,14 +2062,14 @@ if [ -n "$XUI_XRAY_ACCESS_LOG" ] || [ -n "$XUI_XRAY_ERROR_LOG" ] || [ -n "$XUI_X
 
                 rm -f "$TMP_JSON"
 
-                echo "[XRAY] Logging configured via DB: access=${XUI_XRAY_ACCESS_LOG:-none} error=${XUI_XRAY_ERROR_LOG:-none} level=${XUI_XRAY_LOG_LEVEL:-default}"
+                echo "[CHANGE] Логирование Xray обновлено: явно заданы XUI_XRAY_*; значения скрыты"
             else
                 rm -f "$TMP_JSON"
                 echo "[WARN] Could not read xrayTemplateConfig from DB"
             fi
         }
 
-        _configure_xray_logging || echo "[WARN] Xray logging configuration failed (non-fatal)"
+        _configure_xray_logging || fork_warn "Логирование Xray не применено; шаблон не считается исправленным"
     fi
 fi
 
@@ -2067,4 +2095,5 @@ SELECT key, value FROM settings WHERE key IN (
 " 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 > "/run/x-ui-fork-web-sub.sig" 2>/dev/null || true
 fi
 
-echo "Configuration applied!"
+fork_summary
+echo "[DONE] Применение обвязки завершено. Непроверенные действия не означают работоспособность клиента."

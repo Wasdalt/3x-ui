@@ -38,6 +38,8 @@ elif [ -f "$XUI_ENV_FILE" ]; then
     . "$XUI_ENV_FILE"
     set +a
 fi
+. "${SCRIPT_DIR}/fork-policy.sh"
+fork_policy_report
 
 restore_db_backup_on_error() {
     if [ "$INSTALL_DONE" -ne 1 ] && [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
@@ -120,9 +122,8 @@ else
         exit 1
     }
     echo -e "${green}  ✓ Зависимости проверены и установлены${plain}"
-    # Отключаем системный дефолтный сайт nginx на 80 порту, чтобы не конфликтовать с certbot/haproxy
-    rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf 2>/dev/null || true
-    if command -v systemctl >/dev/null 2>&1; then
+    # Never delete the administrator's nginx configuration.
+    if fork_allow XUI_MANAGE_SYSTEM_NGINX "Остановка/отключение системного nginx" && command -v systemctl >/dev/null 2>&1; then
         systemctl stop nginx 2>/dev/null || true
         systemctl disable nginx 2>/dev/null || true
     fi
@@ -212,6 +213,7 @@ fi
 echo -e "${yellow}[3/6] Настройка init-config.sh...${plain}"
 
 cp -f "${SCRIPT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
+cp -f "${SCRIPT_DIR}/fork-policy.sh" "${XUI_DIR}/fork-policy.sh"
 chmod +x "${XUI_DIR}/init-config.sh"
 mkdir -p "${XUI_CONFIG_DIR}"
 if [ -f "${SCRIPT_DIR}/fork-sync.sh" ]; then
@@ -370,8 +372,11 @@ EOF
 
     systemctl daemon-reload
     systemctl reset-failed x-ui-fork-db-apply.service x-ui-fork-db-apply.path >/dev/null 2>&1 || true
-    systemctl restart x-ui-fork-db-apply.path >/dev/null 2>&1 || systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
-    echo -e "${green}  ✓ DB apply path включён${plain}"
+    if fork_allow XUI_AUTO_DB_APPLY "Запуск фонового наблюдателя БД"; then
+        systemctl enable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
+    else
+        systemctl disable --now x-ui-fork-db-apply.path >/dev/null 2>&1 || true
+    fi
 fi
 
 # ============================================================================
@@ -394,8 +399,9 @@ fi
 
 if [ -f "${CERTBOT_HELPER}" ]; then
     . "${CERTBOT_HELPER}"
-    certbot_configure_auto_renewal || true
 
+    if fork_allow XUI_AUTO_CERTS "Первичный выпуск сертификатов панели и сайта"; then
+    certbot_configure_auto_renewal || true
     if [ -n "$XUI_DOMAIN" ]; then
         certbot_issue_domain_cert "$XUI_DOMAIN" "$XUI_ADMIN_EMAIL" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_DOMAIN} (DNS/порт 80?)${plain}"
     else
@@ -406,6 +412,7 @@ if [ -f "${CERTBOT_HELPER}" ]; then
     if [ -n "$XUI_SELFSTEAL_DOMAIN" ] && [ "$XUI_SELFSTEAL_DOMAIN" != "$XUI_DOMAIN" ]; then
         echo -e "${yellow}  Выпуск сертификата для сайта-заглушки (${XUI_SELFSTEAL_DOMAIN})...${plain}"
         certbot_issue_domain_cert "$XUI_SELFSTEAL_DOMAIN" "$XUI_ADMIN_EMAIL" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_SELFSTEAL_DOMAIN}${plain}"
+    fi
     fi
 else
     echo -e "${yellow}  ⚠ ${CERTBOT_HELPER} не найден, certbot пропущен${plain}"
@@ -429,14 +436,14 @@ if [ "$haproxy_enable_val" = "true" ] && command -v haproxy >/dev/null 2>&1 && c
     systemctl restart haproxy >/dev/null 2>&1 || true
 else
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop haproxy >/dev/null 2>&1 || true
-        systemctl disable haproxy >/dev/null 2>&1 || true
+        if [ -n "${XUI_HAPROXY_ENABLE+x}" ]; then
+            systemctl stop haproxy >/dev/null 2>&1 || true
+            systemctl disable haproxy >/dev/null 2>&1 || true
+        fi
     fi
 fi
 
-if [ -x "${XUI_DIR}/decoy-setup.sh" ]; then
-    "${XUI_DIR}/decoy-setup.sh" apply >/dev/null 2>&1 || true
-fi
+echo "[KEEP] SelfSteal обрабатывается ExecStartPre; отдельного повторного запуска нет"
 
 if systemctl is-active --quiet x-ui && [ -f "$DB_PATH" ]; then
     PORT_VALUE=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "")

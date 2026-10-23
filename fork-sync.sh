@@ -34,6 +34,7 @@ sync_shell_file() {
     echo "[FORK-SYNC] Synced $(basename "$target_file")"
 }
 
+sync_shell_file "${PROJECT_DIR}/fork-policy.sh" "${XUI_DIR}/fork-policy.sh"
 sync_shell_file "${PROJECT_DIR}/init-config.sh" "${XUI_DIR}/init-config.sh"
 sync_shell_file "${PROJECT_DIR}/certbot-domain.sh" "${XUI_DIR}/certbot-domain.sh"
 sync_shell_file "${PROJECT_DIR}/fork-db-apply.sh" "${XUI_DIR}/fork-db-apply.sh"
@@ -43,4 +44,3 @@ if [ -d "${PROJECT_DIR}/decoy" ]; then
     mkdir -p "${XUI_DIR}/decoy"
     cp -rf "${PROJECT_DIR}/decoy/"* "${XUI_DIR}/decoy/" 2>/dev/null || true
 fi
-
