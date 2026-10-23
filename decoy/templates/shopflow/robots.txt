@@ -4,4 +4,5 @@ Disallow: /api/private/
 Disallow: /portal/auth/
 Disallow: /admin/
 
-Sitemap: https://shopflow.io/sitemap.xml
+# Replaced with the configured absolute origin by decoy/site_metadata.py.
+Sitemap: __SITE_ORIGIN__/sitemap.xml

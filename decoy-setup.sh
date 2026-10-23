@@ -303,6 +303,16 @@ ${REALITY_PROXY_LOCATIONS:-}
 EOF
 }
 
+prepare_site_metadata() {
+    [ "$SELFSTEAL_TEMPLATE" = shopflow ] || return 0
+    local helper="${DECOY_ROOT}/site_metadata.py"
+    [ -f "$helper" ] && command -v python3 >/dev/null 2>&1 || {
+        echo "[SITE-ERROR] Для метаданных ShopFlow нужен decoy/site_metadata.py и python3" >&2
+        return 1
+    }
+    python3 "$helper" --root "$PUBLIC_DIR" --origin "$1"
+}
+
 setup_reality_service() {
     if fork_policy_enabled XUI_AUTO_CERTS; then
         ensure_reality_certificate || return 1
@@ -314,6 +324,7 @@ setup_reality_service() {
     if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
         switch_template "$SELFSTEAL_TEMPLATE" || return 1
     fi
+    prepare_site_metadata "https://${REALITY_DOMAIN}" || return 1
     install -d -m 0700 /run/x-ui-selfsteal || return 1
     tmp_cfg=$(mktemp) || return 1
     generate_reality_nginx_conf "$tmp_cfg" || { rm -f "$tmp_cfg"; return 1; }
@@ -958,6 +969,11 @@ setup_and_start_service() {
     if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
         switch_template "$SELFSTEAL_TEMPLATE"
     fi
+    if [ "$SELFSTEAL_TEMPLATE" = shopflow ]; then
+        site_domain=$(get_decoy_domain)
+        [ -n "$site_domain" ] || { echo "[SITE-ERROR] Для ShopFlow нужен явный домен сайта" >&2; return 1; }
+        prepare_site_metadata "https://${site_domain}" || return 1
+    fi
     chmod -R 755 "$PUBLIC_DIR" 2>/dev/null || true
 
     if [ -f "/.dockerenv" ] || ( [ -z "$(command -v systemctl 2>/dev/null)" ] && command -v docker >/dev/null 2>&1 ); then
@@ -1153,6 +1169,7 @@ case "${1:-status}" in
         if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
             switch_template "$SELFSTEAL_TEMPLATE"
         fi
+        prepare_site_metadata "http://localhost:${port}" || exit 1
         echo "=========================================================="
         echo "Локальный предпросмотр активной заглушки из .env: ${SELFSTEAL_TEMPLATE}"
         echo "URL: http://localhost:${port}"

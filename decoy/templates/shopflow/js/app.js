@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initFaqAccordion();
   initMobileNav();
   initSystemClock();
+  document.querySelectorAll('[data-site-origin]').forEach(el => {
+    el.textContent = window.location.origin;
+  });
 });
 
 // 1. Симуляция потока заказов в реальном времени
@@ -127,88 +130,76 @@ function initCategoryTabs() {
   });
 }
 
-// 5. Модальные окна (Запрос демо и Вход в кабинет)
+// 5. Локальное демо: без отправки заявок, учётных данных и сетевых запросов.
 function initModals() {
-  // Модалка Демо
   const demoModal = document.getElementById('demoModal');
-  const demoButtons = document.querySelectorAll('.btn-trigger-demo');
-  const closeDemo = document.getElementById('closeDemoModal');
+  const portalModal = document.getElementById('portalModal');
   const demoForm = document.getElementById('demoForm');
+  let previousFocus = null;
 
-  demoButtons.forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (demoModal) demoModal.classList.add('active');
-    });
+  function close(modal) {
+    if (!modal) return;
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+    if (previousFocus) previousFocus.focus();
+  }
+
+  function open(modal, view) {
+    if (!modal) {
+      window.location.assign('/?view=' + view);
+      return;
+    }
+    previousFocus = document.activeElement;
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    const first = modal.querySelector('button, input, a');
+    if (first) first.focus();
+  }
+
+  [[demoModal, 'closeDemoModal'], [portalModal, 'closePortalModal']].forEach(([modal, id]) => {
+    if (!modal) return;
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', modal === demoModal ? 'Интерактивный расчёт' : 'Доступ к кабинету');
+    modal.setAttribute('aria-hidden', 'true');
+    const button = document.getElementById(id);
+    if (button) button.addEventListener('click', () => close(modal));
+    modal.addEventListener('click', e => { if (e.target === modal) close(modal); });
   });
 
-  if (closeDemo && demoModal) {
-    closeDemo.addEventListener('click', () => demoModal.classList.remove('active'));
-  }
+  [['.btn-trigger-demo', demoModal, 'demo'], ['.btn-trigger-portal', portalModal, 'portal']].forEach(([selector, modal, view]) => {
+    document.querySelectorAll(selector).forEach(button => {
+      button.addEventListener('click', e => { e.preventDefault(); open(modal, view); });
+    });
+  });
 
   if (demoForm) {
-    demoForm.addEventListener('submit', (e) => {
+    demoForm.addEventListener('submit', e => {
       e.preventDefault();
-      const submitBtn = demoForm.querySelector('button[type="submit"]');
-      submitBtn.textContent = 'Отправка заявки...';
-      submitBtn.disabled = true;
-
-      setTimeout(() => {
-        const refId = '#ЗАЯВКА-' + Math.floor(10000 + Math.random() * 90000);
-        demoForm.innerHTML = `
-          <div style="text-align:center; padding: 2rem 0;">
-            <div style="width: 52px; height: 52px; border-radius: 50%; background: rgba(16,185,129,0.15); border: 2px solid var(--accent-emerald); display:inline-flex; align-items:center; justify-content:center; color: var(--accent-emerald); margin-bottom: 1rem;">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            </div>
-            <h3 style="margin-bottom:0.5rem;">Заявка успешно принята</h3>
-            <p style="color:var(--text-muted); font-size:0.95rem; margin-bottom:1.5rem;">Номер обращения: <strong>${refId}</strong>. Наш инженер по интеграции свяжется с вами в течение 2 часов.</p>
-            <button class="btn btn-secondary" onclick="document.getElementById('demoModal').classList.remove('active')">Закрыть</button>
-          </div>
-        `;
-      }, 800);
+      const count = Number(document.getElementById('demoOrderCount').value);
+      const result = document.getElementById('demoResult');
+      if (!Number.isInteger(count) || count < 1 || count > 10000000) {
+        result.textContent = 'Введите целое число заказов от 1 до 10 000 000.';
+        return;
+      }
+      result.textContent = 'Ориентировочная экономия: ' + Math.round(count * 4.2).toLocaleString('ru-RU') + ' ₽ / мес. Это локальный расчёт, заявка не отправлена.';
     });
   }
 
-  // Модалка Личного кабинета
-  const portalModal = document.getElementById('portalModal');
-  const portalButtons = document.querySelectorAll('.btn-trigger-portal');
-  const closePortal = document.getElementById('closePortalModal');
-  const portalForm = document.getElementById('portalForm');
-
-  portalButtons.forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (portalModal) portalModal.classList.add('active');
-    });
+  document.addEventListener('keydown', e => {
+    const active = [demoModal, portalModal].find(modal => modal && modal.classList.contains('active'));
+    if (!active) return;
+    if (e.key === 'Escape') close(active);
+    if (e.key === 'Tab') {
+      const items = active.querySelectorAll('button, input, a');
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
   });
-
-  if (closePortal && portalModal) {
-    closePortal.addEventListener('click', () => portalModal.classList.remove('active'));
-  }
-
-  if (portalForm) {
-    portalForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const errBox = document.getElementById('portalErrorBox');
-      const submitBtn = portalForm.querySelector('button[type="submit"]');
-      submitBtn.textContent = 'Проверка ключа доступа...';
-      submitBtn.disabled = true;
-
-      setTimeout(() => {
-        submitBtn.textContent = 'Войти в кабинет';
-        submitBtn.disabled = false;
-        if (errBox) {
-          errBox.style.display = 'block';
-          errBox.textContent = 'Уведомление безопасности: Прямой доступ к панели тенанта требует аппаратного FIDO2-ключа или профиля корпоративного SSO.';
-        }
-      }, 1000);
-    });
-  }
-
-  window.addEventListener('click', (e) => {
-    if (e.target === demoModal) demoModal.classList.remove('active');
-    if (e.target === portalModal) portalModal.classList.remove('active');
-  });
+  const view = new URLSearchParams(window.location.search).get('view');
+  if (view === 'demo' && demoModal) open(demoModal, view);
+  if (view === 'portal' && portalModal) open(portalModal, view);
 }
 
 // 6. Аккордеон FAQ

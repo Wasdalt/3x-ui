@@ -216,6 +216,7 @@ setup_reality_service
             body = f'''
 PUBLIC_DIR="{self.site}"; NGINX_CONF="{conf}"; SERVICE_FILE="{service}"
 validate_reality_runtime() {{ return 0; }}
+prepare_site_metadata() {{ return 0; }}
 generate_reality_nginx_conf() {{ printf new-nginx > "$1"; }}
 nginx() {{ return 0; }}
 install() {{
