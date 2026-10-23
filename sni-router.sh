@@ -13,6 +13,9 @@ validate_router() {
     command -v python3 >/dev/null && command -v haproxy >/dev/null || {
         echo "[ERROR] Требуются python3 и haproxy" >&2; return 1;
     }
+    if [ "${1:-plan}" = apply ] && fork_policy_enabled XUI_AUTO_CERTS; then
+        ensure_reality_certificate || return 1
+    fi
     validate_reality_config || return 1
     python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
         --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format domains > "$work/domains" || return 1
@@ -33,7 +36,7 @@ case "${1:-status}" in
         fork_allow XUI_SNI_ROUTER_ENABLE "Отдельный SNI-router на TCP443" || exit 0
         work=$(mktemp -d)
         trap 'rm -rf "$work"' EXIT
-        validate_router
+        validate_router "$1"
         python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
             --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format plan
         [ "$1" != plan ] || exit 0

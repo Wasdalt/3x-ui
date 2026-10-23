@@ -144,6 +144,58 @@ class SelfStealTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("edge.example.com media.example.com", result.stdout)
 
+    def test_complete_certificate_reconciliation_does_not_call_ca(self):
+        result = self.shell('certbot_issue_domain_cert() { echo UNEXPECTED-CA; return 99; }; '
+                            'ensure_reality_certificate', XUI_SELFSTEAL_EXTRA_DOMAINS="media.example.com")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("UNEXPECTED-CA", result.stdout)
+        self.assertIn("[KEEP]", result.stdout)
+
+    def test_missing_san_does_not_issue_without_permission_and_points_to_explicit_command(self):
+        result = self.shell('certbot_issue_domain_cert() { echo UNEXPECTED-CA; return 99; }; '
+                            'ensure_reality_certificate', XUI_SELFSTEAL_EXTRA_DOMAINS="new.example.com")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("UNEXPECTED-CA", result.stdout)
+        self.assertIn("selfsteal certificate", result.stderr)
+
+    def test_custom_certificate_paths_are_not_overwritten_by_auto_reconcile(self):
+        result = self.shell('ensure_reality_certificate explicit',
+                            XUI_SELFSTEAL_EXTRA_DOMAINS="new.example.com", XUI_AUTO_CERTS="true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Пользовательские пути", result.stderr)
+
+    def test_auto_reconcile_passes_all_names_to_helper_before_strict_validation(self):
+        with tempfile.TemporaryDirectory(prefix="san-helper-", dir=self.base) as tmp:
+            helper = Path(tmp) / "certbot-domain.sh"
+            calls = Path(tmp) / "calls"
+            helper.write_text(f'''certbot_issue_domain_cert() {{ printf '%s\\n' "$1|$3" > "{calls}"; }}\n''')
+            body = f'''
+SCRIPT_DIR="{tmp}"
+resolve_reality_names() {{
+    REALITY_DOMAIN=edge.example.com
+    REALITY_DOMAINS='edge.example.com media.example.com'
+    REALITY_CERT=/etc/letsencrypt/live/edge.example.com/fullchain.pem
+    REALITY_KEY=/etc/letsencrypt/live/edge.example.com/privkey.pem
+}}
+openssl() {{ return 1; }}
+ensure_reality_certificate
+'''
+            result = self.shell(body, XUI_AUTO_CERTS="true")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls.read_text().strip(),
+                             "edge.example.com|edge.example.com media.example.com")
+
+    def test_service_preparation_reconciles_before_validation_when_auto_is_allowed(self):
+        body = '''
+ensure_reality_certificate() { echo reconcile; }
+validate_reality_config() { echo validate; }
+validate_reality_runtime() { echo runtime-not-applying; return 1; }
+setup_reality_service
+'''
+        result = self.shell(body, XUI_AUTO_CERTS="true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.splitlines(), ["reconcile", "validate", "runtime-not-applying"])
+
     def test_bad_mode_is_rejected(self):
         self.assertNotEqual(self.shell("true", XUI_SELFSTEAL_MODE="typo").returncode, 0)
 

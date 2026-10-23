@@ -43,6 +43,83 @@ is_selfsteal_domain() {
     [ "${#1}" -le 253 ] && printf '%s\n' "$1" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
 }
 
+resolve_reality_names() {
+    REALITY_DOMAIN="${XUI_SELFSTEAL_DOMAIN:-}"
+    local discovered_domains="" extra_domain_list="${XUI_SELFSTEAL_EXTRA_DOMAINS:-}"
+    local domain_db="${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}"
+    if [ -z "$REALITY_DOMAIN" ] || [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ]; then
+        if [ -f "$domain_db" ] && command -v python3 >/dev/null 2>&1 && [ -f "${DECOY_ROOT}/selfsteal_domains.py" ]; then
+            discovered_domains=$(python3 "${DECOY_ROOT}/selfsteal_domains.py" --db "$domain_db" \
+                --primary "$REALITY_DOMAIN" --backend-port "$SELFSTEAL_PORT") || return 1
+        elif [ -z "$REALITY_DOMAIN" ]; then
+            echo "[SELFSTEAL-ERROR] Нет домена: задайте serverNames локального SelfSteal во входящем либо XUI_SELFSTEAL_DOMAIN" >&2
+            return 1
+        fi
+    fi
+    if [ -z "$REALITY_DOMAIN" ]; then
+        REALITY_DOMAIN=$(printf '%s\n' "$discovered_domains" | head -n 1)
+        echo "[DISCOVER] Основной HTTPS-домен взят из локального SelfSteal-входящего: ${REALITY_DOMAIN}" >&2
+    fi
+    if [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ] && [ -n "$discovered_domains" ]; then
+        extra_domain_list=$(printf '%s\n' "$discovered_domains" | grep -Fvx "$REALITY_DOMAIN" | paste -sd, - || true)
+    fi
+    is_selfsteal_domain "$REALITY_DOMAIN" || {
+        echo "[SELFSTEAL-ERROR] Некорректный основной DNS-домен SelfSteal" >&2; return 1;
+    }
+    REALITY_DOMAINS="$REALITY_DOMAIN"
+    local extra
+    local -a extra_domains=()
+    IFS=',' read -r -a extra_domains <<< "$extra_domain_list"
+    for extra in "${extra_domains[@]}"; do
+        is_selfsteal_domain "$extra" || {
+            echo "[SELFSTEAL-ERROR] Некорректное дополнительное DNS-имя SelfSteal" >&2; return 1;
+        }
+        case " $REALITY_DOMAINS " in *" $extra "*) ;; *) REALITY_DOMAINS="${REALITY_DOMAINS} ${extra}" ;; esac
+    done
+    REALITY_CERT="${XUI_SELFSTEAL_CERT_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/fullchain.pem}"
+    REALITY_KEY="${XUI_SELFSTEAL_KEY_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/privkey.pem}"
+}
+
+ensure_reality_certificate() {
+    # No service changes or fallback identities. Only CA request is allowed here,
+    # either by policy or by the explicit "selfsteal certificate" command.
+    if [ "$SELFSTEAL_MODE" != reality ] || ! fork_policy_enabled XUI_SELFSTEAL_ENABLE ||
+       fork_policy_enabled XUI_HAPROXY_ENABLE || fork_policy_enabled XUI_SELFSTEAL_PUBLIC; then
+        echo "[CERT-ERROR] Сначала задайте корректный локальный режим REALITY SelfSteal; запрос к CA не выполнялся" >&2
+        return 1
+    fi
+    resolve_reality_names || return 1
+    local domain missing=0
+    if [ -r "$REALITY_CERT" ] && [ -r "$REALITY_KEY" ] &&
+       openssl x509 -in "$REALITY_CERT" -noout -checkend 86400 >/dev/null 2>&1; then
+        for domain in $REALITY_DOMAINS; do
+            if ! openssl x509 -in "$REALITY_CERT" -noout -checkhost "$domain" >/dev/null 2>&1; then
+                echo "[CERT] Не хватает SAN: ${domain}"
+                missing=1
+            fi
+        done
+        if [ "$missing" -eq 0 ]; then
+            echo "[KEEP] Сертификат SelfSteal уже покрывает все обнаруженные имена"
+            return 0
+        fi
+    fi
+    if [ "${1:-}" != explicit ] && ! fork_allow XUI_AUTO_CERTS "Расширение SAN сертификата SelfSteal"; then
+        echo "[NEXT] Выполните x-ui-fork selfsteal certificate для явного запроса без ввода списка доменов" >&2
+        return 1
+    fi
+    if [ "$REALITY_CERT" != "/etc/letsencrypt/live/${REALITY_DOMAIN}/fullchain.pem" ] ||
+       [ "$REALITY_KEY" != "/etc/letsencrypt/live/${REALITY_DOMAIN}/privkey.pem" ]; then
+        echo "[CERT-ERROR] Пользовательские пути сертификата: используйте свой ACME-клиент; файлы не заменялись" >&2
+        return 1
+    fi
+    [ -r "${SCRIPT_DIR}/certbot-domain.sh" ] || {
+        echo "[CERT-ERROR] certbot-domain.sh отсутствует" >&2; return 1;
+    }
+    source "${SCRIPT_DIR}/certbot-domain.sh"
+    echo "[ACTION] SAN SelfSteal согласуется с именами локальных входящих; существующие SAN сохраняются"
+    certbot_issue_domain_cert "$REALITY_DOMAIN" "${XUI_ADMIN_EMAIL:-}" "$REALITY_DOMAINS" || return 1
+}
+
 validate_reality_config() {
     local tool cert_pub key_pub
     case "$SELFSTEAL_TEMPLATE" in
@@ -69,27 +146,7 @@ validate_reality_config() {
             echo "[SELFSTEAL-ERROR] В режиме reality порт 443 принадлежит Xray, не Nginx; отключите XUI_SELFSTEAL_PUBLIC" >&2
             return 1 ;;
     esac
-    REALITY_DOMAIN="${XUI_SELFSTEAL_DOMAIN:-}"
-    local discovered_domains="" extra_domain_list="${XUI_SELFSTEAL_EXTRA_DOMAINS:-}"
-    local domain_db="${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}"
-    # A local REALITY target + serverNames is explicit intent in the panel.
-    # Read it, never invent a name or rewrite the source profile.
-    if [ -z "$REALITY_DOMAIN" ] || [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ]; then
-        if [ -f "$domain_db" ] && command -v python3 >/dev/null 2>&1 && [ -f "${DECOY_ROOT}/selfsteal_domains.py" ]; then
-            discovered_domains=$(python3 "${DECOY_ROOT}/selfsteal_domains.py" --db "$domain_db" \
-                --primary "$REALITY_DOMAIN" --backend-port "$SELFSTEAL_PORT") || return 1
-        elif [ -z "$REALITY_DOMAIN" ]; then
-            echo "[SELFSTEAL-ERROR] Нет домена: задайте serverNames локального SelfSteal во входящем либо XUI_SELFSTEAL_DOMAIN" >&2
-            return 1
-        fi
-    fi
-    if [ -z "$REALITY_DOMAIN" ]; then
-        REALITY_DOMAIN=$(printf '%s\n' "$discovered_domains" | head -n 1)
-        echo "[DISCOVER] Основной HTTPS-домен взят из локального SelfSteal-входящего: ${REALITY_DOMAIN}" >&2
-    fi
-    if [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ] && [ -n "$discovered_domains" ]; then
-        extra_domain_list=$(printf '%s\n' "$discovered_domains" | grep -Fvx "$REALITY_DOMAIN" | paste -sd, - || true)
-    fi
+    resolve_reality_names || return 1
     # No implicit panel-domain fallback, wildcards, ports or nginx configuration syntax.
     if ! is_selfsteal_domain "$REALITY_DOMAIN"; then
         echo "[SELFSTEAL-ERROR] Укажите собственный DNS-домен в XUI_SELFSTEAL_DOMAIN (без схемы, порта и wildcard)" >&2
@@ -113,6 +170,7 @@ validate_reality_config() {
     done
     [ -r "$REALITY_CERT" ] && [ -r "$REALITY_KEY" ] || {
         echo "[SELFSTEAL-ERROR] Нет читаемого сертификата/ключа для ${REALITY_DOMAIN}; самоподписанный fallback запрещён" >&2
+        echo "[NEXT] x-ui-fork selfsteal certificate — явный выпуск для обнаруженных имён" >&2
         return 1
     }
     openssl x509 -in "$REALITY_CERT" -noout -checkend 86400 >/dev/null 2>&1 &&
@@ -129,21 +187,14 @@ validate_reality_config() {
         echo "[SELFSTEAL-ERROR] Закрытый ключ не соответствует сертификату" >&2
         return 1
     fi
-    REALITY_DOMAINS="$REALITY_DOMAIN"
     local extra
-    local -a extra_domains=()
-    IFS=',' read -r -a extra_domains <<< "$extra_domain_list"
-    for extra in "${extra_domains[@]}"; do
-        if ! is_selfsteal_domain "$extra"; then
-            echo "[SELFSTEAL-ERROR] Некорректный XUI_SELFSTEAL_EXTRA_DOMAINS (DNS-имена через запятую)" >&2
-            return 1
-        fi
+    for extra in $REALITY_DOMAINS; do
         if ! openssl verify -purpose sslserver -verify_hostname "$extra" \
             -untrusted "$REALITY_CERT" "$REALITY_CERT" >/dev/null 2>&1; then
             echo "[SELFSTEAL-ERROR] Основной сертификат сайта не покрывает дополнительный домен ${extra}; нужен сертификат с обоими SAN" >&2
+            echo "[NEXT] x-ui-fork selfsteal certificate либо XUI_AUTO_CERTS=true для автоматического согласования" >&2
             return 1
         fi
-        REALITY_DOMAINS="${REALITY_DOMAINS} ${extra}"
     done
     REALITY_PROXY_LOCATIONS=""
     if [ -n "${XUI_SELFSTEAL_PROXY_INBOUNDS:-}" ]; then
@@ -253,6 +304,9 @@ EOF
 }
 
 setup_reality_service() {
+    if fork_policy_enabled XUI_AUTO_CERTS; then
+        ensure_reality_certificate || return 1
+    fi
     validate_reality_config || return 1
     validate_reality_runtime || return 1
     local current_installed="" tmp_cfg backup_dir was_active=0
@@ -1060,6 +1114,13 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 fi
 
 case "${1:-status}" in
+    certificate)
+        [ "$SELFSTEAL_MODE" = reality ] || { echo "[CERT-ERROR] Требуется режим reality" >&2; exit 1; }
+        echo "[ACTION] Пользователь явно запросил выпуск/расширение SAN SelfSteal; БД/службы не перенастраиваются"
+        ensure_reality_certificate explicit
+        validate_reality_config
+        echo "[OK] Сертификат проверен для всех имён. Конфигурация сайта/router ещё не применялась"
+        ;;
     plan)
         if [ "$SELFSTEAL_MODE" != "reality" ]; then
             echo "Для плана SelfSteal REALITY задайте XUI_SELFSTEAL_MODE=reality" >&2
@@ -1069,6 +1130,9 @@ case "${1:-status}" in
         ;;
     validate)
         if [ "$SELFSTEAL_MODE" = "reality" ]; then
+            if fork_policy_enabled XUI_AUTO_CERTS; then
+                ensure_reality_certificate || exit 1
+            fi
             validate_reality_config && validate_reality_runtime
         fi
         ;;
@@ -1103,7 +1167,7 @@ case "${1:-status}" in
         check_status
         ;;
     *)
-        echo "Использование: $0 {status|plan|validate|templates|template <name>|preview [порт]|apply}"
+        echo "Использование: $0 {status|plan|validate|certificate|templates|template <name>|preview [порт]|apply}"
         exit 1
         ;;
 esac

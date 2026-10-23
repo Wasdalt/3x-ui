@@ -169,7 +169,7 @@ Commands:
   backup    Create instant database backup
   restore   Restore database from backup file and apply configuration (optional: [file])
   haproxy   Show HAProxy container/service status, logs and config
-  selfsteal Manage decoy / REALITY SelfSteal (status, plan, validate, apply, templates)
+  selfsteal Manage SelfSteal (status, plan, validate, certificate, apply, templates)
   hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
   sni-router Dedicated common TCP443 router (plan, apply, status, stop); no DB rewrite
   url       Print current panel URL from DB

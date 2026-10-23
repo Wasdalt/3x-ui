@@ -131,6 +131,64 @@ certbot_issue_domain_cert test.example.com ''
         self.assertIn("cooldown", result.stdout)
         self.assertEqual(self.calls.read_text().count("certbot:"), 1)
 
+    def existing_certificate(self):
+        live = self.base / "live" / "test.example.com"
+        live.mkdir(parents=True)
+        (live / "fullchain.pem").write_text("existing-test-certificate")
+        (live / "privkey.pem").write_text("existing-test-key")
+
+    def test_missing_extra_san_expands_same_lineage_and_preserves_existing_dns_names(self):
+        self.existing_certificate()
+        extra = '''
+openssl() {
+    case "$*" in
+        *checkend*) return 0 ;;
+        *checkhost*new.example.com*) return 1 ;;
+        *checkhost*) return 0 ;;
+        *subjectAltName*) printf 'X509v3 Subject Alternative Name:\\n DNS:test.example.com, DNS:keep.example.com\\n' ;;
+        *) return 1 ;;
+    esac
+}
+'''
+        result = self.run_helper(extra=extra,
+                                 invocation="certbot_issue_domain_cert test.example.com '' new.example.com")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls.read_text()
+        self.assertIn("--cert-name test.example.com --expand", calls)
+        self.assertIn("-d test.example.com", calls)
+        self.assertIn("-d new.example.com", calls)
+        self.assertIn("-d keep.example.com", calls)
+        self.assertEqual(calls.count("certbot:"), 1)
+
+    def test_all_sans_already_present_do_not_request_certificate(self):
+        self.existing_certificate()
+        result = self.run_helper(extra="openssl() { return 0; }",
+                                 invocation="certbot_issue_domain_cert test.example.com '' new.example.com")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertIn("covers all requested names", result.stdout)
+
+    def test_existing_wildcard_is_not_silently_removed(self):
+        self.existing_certificate()
+        extra = '''
+openssl() {
+    case "$*" in
+        *checkend*) return 0 ;;
+        *checkhost*new.example.com*) return 1 ;;
+        *checkhost*) return 0 ;;
+        *subjectAltName*) printf 'X509v3 Subject Alternative Name:\\n DNS:test.example.com, DNS:*.old.example.com\\n' ;;
+        *) return 1 ;;
+    esac
+}
+'''
+        result = self.run_helper(extra=extra,
+                                 invocation="certbot_issue_domain_cert test.example.com '' new.example.com")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("wildcard/non-DNS", result.stdout)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual((self.base / "live/test.example.com/fullchain.pem").read_text(),
+                         "existing-test-certificate")
+
     def test_explicit_retry_can_bypass_cooldown(self):
         self.env["XUI_CERTBOT_RETRY_DELAY"] = "0"
         result = self.run_helper(certbot_result=1, invocation='''

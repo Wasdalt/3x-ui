@@ -6,7 +6,7 @@ set -e
 XUI_SERVICE_NAME="${XUI_SERVICE_NAME:-x-ui}"
 XUI_CERTBOT_DEPLOY_HOOK="${XUI_CERTBOT_DEPLOY_HOOK:-/etc/letsencrypt/renewal-hooks/deploy/restart-x-ui.sh}"
 
-is_domain_name() {
+is_domain_name() (
     domain=$1
 
     [ -n "$domain" ] || return 1
@@ -24,7 +24,7 @@ is_domain_name() {
         *.*) return 0 ;;
         *) return 1 ;;
     esac
-}
+)
 
 is_placeholder_email() {
     email=$1
@@ -55,6 +55,10 @@ certbot_issue_domain_cert() (
     # by several independent systemd entrypoints).
     domain=$1
     email=${2:-}
+    additional_domains=${3:-}
+    case "$additional_domains" in *[!A-Za-z0-9.,\ -]*)
+        echo "[CERT] Additional SAN list contains unsupported characters"; return 1 ;;
+    esac
 
     if ! is_domain_name "$domain"; then
         echo "[CERT] Domain is empty or invalid, skipping certificate issue"
@@ -68,14 +72,55 @@ certbot_issue_domain_cert() (
 
     cert_path="${XUI_CERTBOT_LIVE_DIR:-/etc/letsencrypt/live}/${domain}/fullchain.pem"
     key_path="${XUI_CERTBOT_LIVE_DIR:-/etc/letsencrypt/live}/${domain}/privkey.pem"
+    requested_domains="$domain"
+    for candidate in $(printf '%s' "$additional_domains" | tr ',' ' '); do
+        if ! is_domain_name "$candidate"; then
+            echo "[CERT] Invalid additional DNS name; request cancelled"
+            return 1
+        fi
+        case " $requested_domains " in *" $candidate "*) ;; *) requested_domains="$requested_domains $candidate" ;; esac
+    done
+    requested_count=$(printf '%s\n' "$requested_domains" | wc -w)
+    [ "$requested_count" -le 100 ] || { echo "[CERT] Too many SAN names"; return 1; }
+    certificate_ready=0
     if [ -r "$cert_path" ] && [ -r "$key_path" ]; then
         if command -v openssl >/dev/null 2>&1 \
-           && openssl x509 -in "$cert_path" -noout -checkend 86400 >/dev/null 2>&1 \
-           && openssl x509 -in "$cert_path" -noout -checkhost "$domain" >/dev/null 2>&1; then
-            echo "[CERT] Certificate for ${domain} is valid — skipping issue"
-            return 0
+           && openssl x509 -in "$cert_path" -noout -checkend 86400 >/dev/null 2>&1; then
+            certificate_ready=1
+            for candidate in $requested_domains; do
+                if ! openssl x509 -in "$cert_path" -noout -checkhost "$candidate" >/dev/null 2>&1; then
+                    certificate_ready=0
+                    echo "[CERT] Missing SAN: ${candidate}; certificate ${domain} needs expansion"
+                fi
+            done
         fi
     fi
+    if [ "$certificate_ready" -eq 1 ]; then
+        echo "[CERT] Certificate ${domain} covers all requested names — skipping issue"
+        return 0
+    fi
+    # Preserve every existing DNS SAN when expanding. Never silently drop a
+    # wildcard/non-DNS identity that this HTTP-01 helper cannot safely reissue.
+    if [ -r "$cert_path" ] && command -v openssl >/dev/null 2>&1; then
+        san_text=$(openssl x509 -in "$cert_path" -noout -ext subjectAltName 2>/dev/null || true)
+        case "$san_text" in
+            *'DNS:*'*|*'IP Address:'*|*'URI:'*|*'email:'*)
+                echo "[CERT] Existing wildcard/non-DNS SAN requires a separate DNS-01/manual renewal; old certificate kept"
+                return 1 ;;
+        esac
+        unhandled_san=$(printf '%s\n' "$san_text" | sed '1d' | sed -E 's/DNS:[^,[:space:]]+//g' | tr -d ',[:space:]')
+        if [ -n "$unhandled_san" ]; then
+            echo "[CERT] Existing SAN type cannot be safely preserved by HTTP-01 helper; old certificate kept"
+            return 1
+        fi
+        existing_names=$(printf '%s\n' "$san_text" | grep -oE 'DNS:[^,[:space:]]+' | sed 's/^DNS://' || true)
+        for candidate in $existing_names; do
+            is_domain_name "$candidate" || { echo "[CERT] Unsafe existing SAN; old certificate kept"; return 1; }
+            case " $requested_domains " in *" $candidate "*) ;; *) requested_domains="$requested_domains $candidate" ;; esac
+        done
+    fi
+    requested_count=$(printf '%s\n' "$requested_domains" | wc -w)
+    [ "$requested_count" -le 100 ] || { echo "[CERT] Preserved SAN set exceeds certificate limit"; return 1; }
 
     state_dir="${XUI_CERTBOT_STATE_DIR:-/run/x-ui-certbot}"
     (umask 077; mkdir -p "$state_dir") || return 1
@@ -130,8 +175,10 @@ certbot_issue_domain_cert() (
         done
     fi
 
-    set -- certonly --non-interactive --agree-tos --cert-name "$domain" --expand \
-        -d "$domain" --preferred-challenges http
+    set -- certonly --non-interactive --agree-tos --cert-name "$domain" --expand --preferred-challenges http
+    for candidate in $requested_domains; do
+        set -- "$@" -d "$candidate"
+    done
     if is_placeholder_email "$email"; then
         set -- "$@" --register-unsafely-without-email
     else
