@@ -171,6 +171,7 @@ Commands:
   haproxy   Show HAProxy container/service status, logs and config
   selfsteal Manage decoy / REALITY SelfSteal (status, plan, validate, apply, templates)
   hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
+  sni-router Dedicated common TCP443 router (plan, apply, status, stop); no DB rewrite
   url       Print current panel URL from DB
   env       Print active .env path
   policy    Show effective opt-in permissions without applying configuration
@@ -401,6 +402,14 @@ case "${1:-help}" in
             echo -e "${red}decoy-setup.sh не найден в ${PROJECT_DIR} или /usr/local/x-ui${plain}"
             exit 1
         fi
+        ;;
+    sni-router)
+        need_root
+        shift
+        if [ -r "${PROJECT_DIR}/sni-router.sh" ]; then
+            exec bash "${PROJECT_DIR}/sni-router.sh" "$@"
+        fi
+        exec bash /usr/local/x-ui/sni-router.sh "$@"
         ;;
     hosts-inherit)
         need_root

@@ -49,7 +49,7 @@ class SelfStealTests(unittest.TestCase):
                         "-keyout", str(cls.key), "-out", str(cls.base / "leaf.csr"),
                         "-subj", "/CN=edge.example.com")
         extensions = cls.base / "extensions"
-        extensions.write_text("subjectAltName=DNS:edge.example.com\n"
+        extensions.write_text("subjectAltName=DNS:edge.example.com,DNS:media.example.com\n"
                               "extendedKeyUsage=serverAuth\n"
                               "keyUsage=critical,digitalSignature,keyEncipherment\n"
                               "basicConstraints=CA:FALSE\n")
@@ -74,6 +74,7 @@ class SelfStealTests(unittest.TestCase):
                 del env[key]
         env.update(XUI_ENV_FILE=str(self.env_file), XUI_SELFSTEAL_MODE="reality",
                    XUI_SELFSTEAL_ENABLE="true",
+                   XUI_DB_PATH=str(self.base / "no-panel.db"),
                    XUI_SELFSTEAL_DOMAIN="edge.example.com", XUI_HAPROXY_ENABLE="false",
                    XUI_SELFSTEAL_PUBLIC="false", XUI_SELFSTEAL_CERT_FILE=str(self.cert),
                    XUI_SELFSTEAL_KEY_FILE=str(self.key), SSL_CERT_FILE=str(self.ca),
@@ -118,6 +119,30 @@ class SelfStealTests(unittest.TestCase):
     def test_untrusted_certificate_is_rejected(self):
         result = self.shell("validate_reality_config", SSL_CERT_FILE="/dev/null")
         self.assertNotEqual(result.returncode, 0)
+
+    def test_additional_selfsteal_names_require_matching_san(self):
+        valid = self.shell("validate_reality_config; printf '%s' \"$REALITY_DOMAINS\"",
+                           XUI_SELFSTEAL_EXTRA_DOMAINS="media.example.com")
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertIn("media.example.com", valid.stdout)
+        for name in ("other.example.com", "media.example.com;", "media.example.com, bad.example.com"):
+            with self.subTest(name=name):
+                invalid = self.shell("validate_reality_config", XUI_SELFSTEAL_EXTRA_DOMAINS=name)
+                self.assertNotEqual(invalid.returncode, 0)
+
+    def test_primary_and_alias_names_can_come_from_panel_without_environment_lists(self):
+        with tempfile.TemporaryDirectory(prefix="auto-names-", dir=self.base) as tmp:
+            db = Path(tmp) / "panel.db"
+            with closing(sqlite3.connect(db)) as conn, conn:
+                conn.execute("CREATE TABLE inbounds (id INTEGER,enable INTEGER,stream_settings TEXT)")
+                for inbound_id, domain in ((4, "edge.example.com"), (13, "media.example.com")):
+                    stream = {"security": "reality", "realitySettings": {
+                        "target": "/run/x-ui-selfsteal/https.sock", "serverNames": [domain]}}
+                    conn.execute("INSERT INTO inbounds VALUES (?,1,?)", (inbound_id, json.dumps(stream)))
+            result = self.shell('validate_reality_config; printf "%s" "$REALITY_DOMAINS"',
+                                XUI_DB_PATH=str(db), XUI_SELFSTEAL_DOMAIN="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("edge.example.com media.example.com", result.stdout)
 
     def test_bad_mode_is_rejected(self):
         self.assertNotEqual(self.shell("true", XUI_SELFSTEAL_MODE="typo").returncode, 0)

@@ -87,6 +87,8 @@ fi
 cp -f "${SCRIPT_DIR}/hosts-tls-inherit.sh" "${XUI_DIR}/hosts-tls-inherit.sh"
 cp -f "${SCRIPT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
 chmod +x "${XUI_DIR}/hosts-tls-inherit.sh"
+cp -f "${SCRIPT_DIR}/sni-router.sh" "${XUI_DIR}/sni-router.sh"
+chmod +x "${XUI_DIR}/sni-router.sh"
 
 if [ -f "${SCRIPT_DIR}/.env" ]; then
     ln -sf "${SCRIPT_DIR}/.env" "$XUI_ENV_FILE"

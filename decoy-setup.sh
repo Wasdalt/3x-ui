@@ -39,6 +39,10 @@ case "$SELFSTEAL_MODE" in
     *) echo "[SELFSTEAL-ERROR] XUI_SELFSTEAL_MODE должен быть legacy или reality" >&2; exit 1 ;;
 esac
 
+is_selfsteal_domain() {
+    [ "${#1}" -le 253 ] && printf '%s\n' "$1" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
+}
+
 validate_reality_config() {
     local tool cert_pub key_pub
     case "$SELFSTEAL_TEMPLATE" in
@@ -66,9 +70,28 @@ validate_reality_config() {
             return 1 ;;
     esac
     REALITY_DOMAIN="${XUI_SELFSTEAL_DOMAIN:-}"
+    local discovered_domains="" extra_domain_list="${XUI_SELFSTEAL_EXTRA_DOMAINS:-}"
+    local domain_db="${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}"
+    # A local REALITY target + serverNames is explicit intent in the panel.
+    # Read it, never invent a name or rewrite the source profile.
+    if [ -z "$REALITY_DOMAIN" ] || [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ]; then
+        if [ -f "$domain_db" ] && command -v python3 >/dev/null 2>&1 && [ -f "${DECOY_ROOT}/selfsteal_domains.py" ]; then
+            discovered_domains=$(python3 "${DECOY_ROOT}/selfsteal_domains.py" --db "$domain_db" \
+                --primary "$REALITY_DOMAIN" --backend-port "$SELFSTEAL_PORT") || return 1
+        elif [ -z "$REALITY_DOMAIN" ]; then
+            echo "[SELFSTEAL-ERROR] Нет домена: задайте serverNames локального SelfSteal во входящем либо XUI_SELFSTEAL_DOMAIN" >&2
+            return 1
+        fi
+    fi
+    if [ -z "$REALITY_DOMAIN" ]; then
+        REALITY_DOMAIN=$(printf '%s\n' "$discovered_domains" | head -n 1)
+        echo "[DISCOVER] Основной HTTPS-домен взят из локального SelfSteal-входящего: ${REALITY_DOMAIN}" >&2
+    fi
+    if [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ] && [ -n "$discovered_domains" ]; then
+        extra_domain_list=$(printf '%s\n' "$discovered_domains" | grep -Fvx "$REALITY_DOMAIN" | paste -sd, - || true)
+    fi
     # No implicit panel-domain fallback, wildcards, ports or nginx configuration syntax.
-    if [ "${#REALITY_DOMAIN}" -gt 253 ] ||
-       ! printf '%s\n' "$REALITY_DOMAIN" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'; then
+    if ! is_selfsteal_domain "$REALITY_DOMAIN"; then
         echo "[SELFSTEAL-ERROR] Укажите собственный DNS-домен в XUI_SELFSTEAL_DOMAIN (без схемы, порта и wildcard)" >&2
         return 1
     fi
@@ -106,6 +129,22 @@ validate_reality_config() {
         echo "[SELFSTEAL-ERROR] Закрытый ключ не соответствует сертификату" >&2
         return 1
     fi
+    REALITY_DOMAINS="$REALITY_DOMAIN"
+    local extra
+    local -a extra_domains=()
+    IFS=',' read -r -a extra_domains <<< "$extra_domain_list"
+    for extra in "${extra_domains[@]}"; do
+        if ! is_selfsteal_domain "$extra"; then
+            echo "[SELFSTEAL-ERROR] Некорректный XUI_SELFSTEAL_EXTRA_DOMAINS (DNS-имена через запятую)" >&2
+            return 1
+        fi
+        if ! openssl verify -purpose sslserver -verify_hostname "$extra" \
+            -untrusted "$REALITY_CERT" "$REALITY_CERT" >/dev/null 2>&1; then
+            echo "[SELFSTEAL-ERROR] Основной сертификат сайта не покрывает дополнительный домен ${extra}; нужен сертификат с обоими SAN" >&2
+            return 1
+        fi
+        REALITY_DOMAINS="${REALITY_DOMAINS} ${extra}"
+    done
     REALITY_PROXY_LOCATIONS=""
     if [ -n "${XUI_SELFSTEAL_PROXY_INBOUNDS:-}" ]; then
         if ! command -v python3 >/dev/null 2>&1 || [ ! -f "${DECOY_ROOT}/reality_routes.py" ]; then
@@ -150,6 +189,7 @@ SelfSteal: REALITY -> локальный HTTPS Nginx (без изменения 
   Security: reality; SNI: ${REALITY_DOMAIN}; fingerprint: chrome
   Не переопределять SNI адресом; не отключать проверку сертификата
 Сертификат: ${REALITY_CERT}
+HTTPS-имена сайта: ${REALITY_DOMAINS}
 Nginx НЕ слушает публичные 80/443. Локальный HTTPS: 127.0.0.1:${SELFSTEAL_PORT}.
 Старые входящие/Hosts автоматически НЕ мигрируют. DNS и свободный порт проверьте отдельно.
 EOF
@@ -197,7 +237,7 @@ http {
         listen unix:${REALITY_SOCKET} ssl proxy_protocol ${h2_listen};
         listen 127.0.0.1:${SELFSTEAL_PORT} ssl ${h2_listen};
         ${h2_line}
-        server_name ${REALITY_DOMAIN};
+        server_name ${REALITY_DOMAINS:-$REALITY_DOMAIN};
         ssl_certificate ${REALITY_CERT};
         ssl_certificate_key ${REALITY_KEY};
         ssl_protocols TLSv1.2 TLSv1.3;
