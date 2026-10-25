@@ -41,6 +41,10 @@ sync_shell_file "${PROJECT_DIR}/fork-db-apply.sh" "${XUI_DIR}/fork-db-apply.sh"
 sync_shell_file "${PROJECT_DIR}/decoy-setup.sh" "${XUI_DIR}/decoy-setup.sh"
 sync_shell_file "${PROJECT_DIR}/hosts-tls-inherit.sh" "${XUI_DIR}/hosts-tls-inherit.sh"
 sync_shell_file "${PROJECT_DIR}/sni-router.sh" "${XUI_DIR}/sni-router.sh"
+sync_shell_file "${PROJECT_DIR}/panel-controller.sh" "${XUI_DIR}/panel-controller.sh"
+if [ -f "${PROJECT_DIR}/panel-controller.py" ]; then
+    cp -f "${PROJECT_DIR}/panel-controller.py" "${XUI_DIR}/panel-controller.py"
+fi
 if [ -f "${PROJECT_DIR}/hosts-tls-inherit.py" ]; then
     cp -f "${PROJECT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
 fi

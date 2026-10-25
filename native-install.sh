@@ -251,6 +251,9 @@ cp -f "${SCRIPT_DIR}/hosts-tls-inherit.py" "${XUI_DIR}/hosts-tls-inherit.py"
 chmod +x "${XUI_DIR}/hosts-tls-inherit.sh"
 cp -f "${SCRIPT_DIR}/sni-router.sh" "${XUI_DIR}/sni-router.sh"
 chmod +x "${XUI_DIR}/sni-router.sh"
+cp -f "${SCRIPT_DIR}/panel-controller.sh" "${XUI_DIR}/panel-controller.sh"
+cp -f "${SCRIPT_DIR}/panel-controller.py" "${XUI_DIR}/panel-controller.py"
+chmod +x "${XUI_DIR}/panel-controller.sh"
 mkdir -p "${XUI_DIR}/xray-logs"
 echo -e "${green}  ✓ init-config.sh скопирован в ${XUI_DIR}/${plain}"
 
@@ -430,6 +433,7 @@ echo ""
 systemctl restart x-ui
 sleep 2
 bash "${XUI_DIR}/hosts-tls-inherit.sh" install
+bash "${XUI_DIR}/panel-controller.sh" install
 
 haproxy_enable_val="false"
 if [ -f "${XUI_CONFIG_DIR}/.env" ]; then

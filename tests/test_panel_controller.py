@@ -6,8 +6,10 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -73,6 +75,56 @@ class PanelControllerTests(unittest.TestCase):
 
     def health(self, routes):
         self.checks.append(routes)
+
+    def test_certificate_primary_is_not_selected_by_alphabetical_san_order(self):
+        self.stream["realitySettings"]["serverNames"] = ["studio.example.com", "media.example.com"]
+        self.save_stream()
+        self.controller.run_once()
+        for _, env in self.calls:
+            self.assertEqual(env["XUI_SELFSTEAL_DOMAIN"], "studio.example.com")
+            self.assertEqual(env["XUI_SELFSTEAL_EXTRA_DOMAINS"], "media.example.com")
+
+    def test_explicit_existing_certificate_primary_is_preserved(self):
+        self.stream["realitySettings"]["serverNames"] = ["media.example.com", "studio.example.com"]
+        self.save_stream()
+        self.env["XUI_SELFSTEAL_DOMAIN"] = "studio.example.com"
+        self.make_controller().run_once()
+        for _, env in self.calls:
+            self.assertEqual(env["XUI_SELFSTEAL_DOMAIN"], "studio.example.com")
+
+    @unittest.skipUnless(all(shutil.which(tool) for tool in
+                            ("bash", "python3", "nginx", "haproxy", "openssl", "curl", "ss")),
+                         "wrapper dependencies unavailable")
+    def test_shell_plan_does_not_write_database_or_state(self):
+        config = self.directory / "controller.env"
+        config.write_text("XUI_PANEL_CONTROLLER_ENABLE=false\nXUI_AUTO_DB_APPLY=false\n"
+                          "XUI_HOSTS_SYNC=false\nXUI_REWRITE_INBOUNDS=false\n")
+        env = dict(os.environ, XUI_ENV_FILE=str(config), XUI_DB_PATH=str(self.db),
+                   XUI_PANEL_CONTROLLER_STATE_DIR=str(self.state_dir),
+                   PYTHONDONTWRITEBYTECODE="1")
+        before = self.db.read_bytes()
+        result = subprocess.run(["bash", str(ROOT / "panel-controller.sh"), "plan"],
+                                env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.removeprefix("[CONTROLLER] "))["status"], "planned")
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertFalse(self.state_dir.exists())
+
+    def test_real_router_loader_accepts_only_owned_pending_during_staging(self):
+        from decoy.sni_routes import RouterError, load_routes
+
+        def runner(argv, env):
+            if Path(argv[0]).name == "sni-router.sh":
+                with self.assertRaises(RouterError):
+                    load_routes(self.db, [1])
+                routes = load_routes(self.db, [1], include_managed_pending=True)
+                self.assertEqual([route.domain for route in routes], ["edge.example.com"])
+                self.assertEqual(self.rows()[0]["is_disabled"], 1)
+            self.runner(argv, env)
+
+        self.make_controller(runner=runner).run_once()
+        self.assertEqual(self.rows()[0]["is_disabled"], 0)
+        self.assertEqual([route.domain for route in load_routes(self.db, [1])], ["edge.example.com"])
 
     def make_controller(self, **kwargs):
         options = dict(env=self.env, runner=self.runner, health=self.health,
@@ -360,7 +412,6 @@ class PanelControllerTests(unittest.TestCase):
     def test_invalid_preparation_not_repaired(self):
         original = json.loads(json.dumps(self.stream))
         mutations = [
-            ("UPDATE inbounds SET listen='0.0.0.0'", None),
             ("UPDATE inbounds SET port=443", None),
             ("UPDATE inbounds SET port=10444", None),
             ("UPDATE inbounds SET port=80", None),
@@ -383,6 +434,43 @@ class PanelControllerTests(unittest.TestCase):
                 with self.assertRaises(pc.ControllerError):
                     self.controller.run_once()
                 self.assert_no_effects(hosts, inbounds)
+
+    def test_public_reality_is_not_reconfigured_or_blocking_prepared_profiles(self):
+        public = json.loads(json.dumps(self.stream))
+        public["realitySettings"]["serverNames"] = ["direct.example.com"]
+        self.execute("INSERT INTO inbounds (id,enable,protocol,listen,port,stream_settings) "
+                     "VALUES (2,1,'vless','0.0.0.0',443,?)", (json.dumps(public),))
+        result = self.controller.run_once()
+        self.assertEqual(result["status"], "applied")
+        self.assertIn(2, result["skipped"])
+        self.assertEqual([host["inbound_id"] for host in self.rows()], [1])
+        self.assertEqual(self.rows("inbounds")[1]["listen"], "0.0.0.0")
+
+    def test_live_traffic_counters_do_not_starve_reconciliation(self):
+        self.execute("ALTER TABLE inbounds ADD COLUMN up INTEGER DEFAULT 0")
+        self.execute("ALTER TABLE inbounds ADD COLUMN down INTEGER DEFAULT 0")
+
+        def runner(argv, env):
+            self.runner(argv, env)
+            self.execute("UPDATE inbounds SET up=up+1,down=down+2")
+
+        result = self.make_controller(runner=runner).run_once()
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(self.rows()[0]["is_disabled"], 0)
+        self.assertGreater(self.rows("inbounds")[0]["up"], 0)
+
+    def test_single_managed_domain_rename_updates_same_host_after_checks(self):
+        host_id = self.add_host(tags=pc.MANAGED)
+        self.controller.run_once()
+        self.calls.clear()
+        self.stream["realitySettings"]["serverNames"] = ["renamed.example.com"]
+        self.save_stream()
+        result = self.controller.run_once()
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]["id"], host_id)
+        self.assertEqual(self.rows()[0]["sni"], "renamed.example.com")
+        self.assertEqual(self.rows()[0]["is_disabled"], 0)
 
     def test_supported_transport_fields_and_ipv6(self):
         original = json.loads(json.dumps(self.stream))

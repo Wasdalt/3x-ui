@@ -56,7 +56,11 @@ resolve_project_dir() {
 }
 
 PROJECT_DIR=$(resolve_project_dir)
-if [ "${1:-help}" != "policy" ] && [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply.sh" ]; then
+_fork_readonly=0
+case "${1:-help}:${2:-}" in
+    policy:*|controller:plan|controller:status|controller:log) _fork_readonly=1 ;;
+esac
+if [ "$_fork_readonly" -eq 0 ] && [ "$EUID" -eq 0 ] && [ -d "$PROJECT_DIR" ] && [ -f "$PROJECT_DIR/native-apply.sh" ]; then
     mkdir -p "/etc/x-ui"
     echo "$PROJECT_DIR" > "$PROJECT_DIR_FILE" 2>/dev/null || true
 fi
@@ -172,6 +176,7 @@ Commands:
   selfsteal Manage SelfSteal (status, plan, validate, certificate, apply, templates)
   hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
   sni-router Dedicated common TCP443 router (plan, apply, status, stop); no DB rewrite
+  controller Managed Host/certificate/router cycle (plan, once, install, status, log, stop)
   url       Print current panel URL from DB
   env       Print active .env path
   policy    Show effective opt-in permissions without applying configuration
@@ -402,6 +407,14 @@ case "${1:-help}" in
             echo -e "${red}decoy-setup.sh не найден в ${PROJECT_DIR} или /usr/local/x-ui${plain}"
             exit 1
         fi
+        ;;
+    controller)
+        need_root
+        shift
+        if [ -r "${PROJECT_DIR}/panel-controller.sh" ]; then
+            exec bash "${PROJECT_DIR}/panel-controller.sh" "$@"
+        fi
+        exec bash /usr/local/x-ui/panel-controller.sh "$@"
         ;;
     sni-router)
         need_root

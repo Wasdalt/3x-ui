@@ -179,6 +179,11 @@ certbot_issue_domain_cert() (
     for candidate in $requested_domains; do
         set -- "$@" -d "$candidate"
     done
+    if [ "${XUI_PANEL_CONTROLLER_ENABLE:-}" = true ] && [ "${XUI_PANEL_CONTROLLER_CONTEXT:-}" = 1 ]; then
+        # The controller reloads its own site/router after validating them.
+        # Do not run the fork's global directory hook, which also reloads x-ui.
+        set -- "$@" --no-directory-hooks
+    fi
     if is_placeholder_email "$email"; then
         set -- "$@" --register-unsafely-without-email
     else

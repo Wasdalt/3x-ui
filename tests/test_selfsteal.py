@@ -231,8 +231,9 @@ if setup_reality_service; then exit 99; fi
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(conf.read_text(), "old-nginx")
             self.assertEqual(service.read_text(), "old-service")
-            self.assertIn("stop x-ui-decoy.service", calls.read_text())
-            self.assertIn("start x-ui-decoy.service", calls.read_text())
+            self.assertIn("reload x-ui-decoy.service", calls.read_text())
+            self.assertNotIn("stop x-ui-decoy.service", calls.read_text())
+            self.assertNotIn("restart x-ui-decoy.service", calls.read_text())
             self.assertNotIn("enable x-ui-decoy.service", calls.read_text())
 
     def test_expiring_certificate_is_rejected(self):
@@ -258,6 +259,21 @@ if setup_reality_service; then exit 99; fi
                             XUI_DB_PATH=str(self.base / "missing-panel.db"))
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.base / "missing-panel.db").exists())
+
+    def test_controller_scope_survives_normal_env_sourcing(self):
+        with tempfile.TemporaryDirectory(prefix="controller-env-", dir=self.base) as tmp:
+            env = Path(tmp) / "server.env"
+            env.write_text("XUI_SELFSTEAL_DOMAIN=wrong.example.com\n"
+                           "XUI_SELFSTEAL_MODE=legacy\nXUI_AUTO_DB_APPLY=true\n"
+                           "XUI_SNI_ROUTER_INBOUNDS=999\nXUI_PANEL_CONTROLLER_ENABLE=false\n")
+            result = self.shell('printf "%s|%s|%s|%s|%s" "$XUI_SELFSTEAL_DOMAIN" '
+                                '"$XUI_SELFSTEAL_MODE" "$XUI_AUTO_DB_APPLY" '
+                                '"$XUI_SNI_ROUTER_INBOUNDS" "$XUI_PANEL_CONTROLLER_ENABLE"',
+                                XUI_ENV_FILE=str(env), XUI_PANEL_CONTROLLER_ENABLE="true",
+                                XUI_PANEL_CONTROLLER_CONTEXT="1", XUI_AUTO_DB_APPLY="false",
+                                XUI_SNI_ROUTER_INBOUNDS="4,13")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "edge.example.com|reality|false|4,13|true")
 
     def test_legacy_private_backend_does_not_bind_public_80_or_443(self):
         with tempfile.TemporaryDirectory(prefix="legacy-", dir=self.base) as tmp:

@@ -103,6 +103,21 @@ class SniRouterTests(unittest.TestCase):
             conn.execute("UPDATE hosts SET sni='other.example.com'")
         with self.assertRaises(sni.RouterError):
             sni.load_routes(self.db, [])
+
+    def test_pending_routes_require_exact_managed_tags_and_explicit_mode(self):
+        self.add()
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("ALTER TABLE hosts ADD COLUMN tags TEXT")
+            conn.execute("UPDATE hosts SET is_disabled=1,tags='[\"fork-managed\",\"fork-pending\"]'")
+        with self.assertRaises(sni.RouterError):
+            sni.load_routes(self.db, [4])
+        self.assertEqual(len(sni.load_routes(self.db, [4], include_managed_pending=True)), 1)
+        for value in ("fork-pending", "not-fork-managed,fork-pending", "fork-managed", "[invalid"):
+            with self.subTest(value=value):
+                with closing(sqlite3.connect(self.db)) as conn, conn:
+                    conn.execute("UPDATE hosts SET tags=?", (value,))
+                with self.assertRaises(sni.RouterError):
+                    sni.load_routes(self.db, [4], include_managed_pending=True)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE hosts SET is_disabled=1")
         with self.assertRaises(sni.RouterError):

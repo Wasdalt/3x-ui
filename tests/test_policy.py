@@ -27,7 +27,7 @@ class PolicyTests(unittest.TestCase):
                               env=clean_environment(**values), capture_output=True, text=True)
 
     def test_important_actions_are_opt_in(self):
-        for flag in ("XUI_REWRITE_INBOUNDS", "XUI_SYNC_INBOUND_CERTS", "XUI_TUNE_NETWORK",
+        for flag in ("XUI_PANEL_CONTROLLER_ENABLE", "XUI_REWRITE_INBOUNDS", "XUI_SYNC_INBOUND_CERTS", "XUI_TUNE_NETWORK",
                      "XUI_CLEANUP_ORPHANS", "XUI_DB_MAINTENANCE", "XUI_AUTO_DB_APPLY",
                      "XUI_AUTO_CERTS", "XUI_AUTO_CERT_DOMAINS", "XUI_MANAGE_SYSTEM_NGINX",
                      "XUI_CERTBOT_STOP_WEB_SERVER",

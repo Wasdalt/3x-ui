@@ -7,6 +7,17 @@ source "${SCRIPT_DIR}/decoy-setup.sh"
 unit="x-ui-sni-router.service"
 config="/etc/x-ui/sni-router.cfg"
 renderer="${DECOY_ROOT}/sni_routes.py"
+pending_args=()
+if [ "${2:-}" = --managed-pending ]; then
+    if [ "${XUI_PANEL_CONTROLLER_ENABLE:-}" != true ] || [ "${XUI_PANEL_CONTROLLER_CONTEXT:-}" != 1 ]; then
+        echo "[ERROR] Pending Hosts разрешены только в проверенном проходе включённого контроллера" >&2
+        exit 1
+    fi
+    pending_args=(--include-managed-pending)
+elif [ -n "${2:-}" ]; then
+    echo "[ERROR] Неизвестный аргумент router" >&2
+    exit 1
+fi
 
 validate_router() {
     [ "$SELFSTEAL_MODE" = reality ] || { echo "[ERROR] SNI router requires XUI_SELFSTEAL_MODE=reality" >&2; return 1; }
@@ -18,7 +29,7 @@ validate_router() {
     fi
     validate_reality_config || return 1
     python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
-        --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format domains > "$work/domains" || return 1
+        --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" "${pending_args[@]}" --format domains > "$work/domains" || return 1
     local domain
     while IFS= read -r domain; do
         if ! printf '%s\n' "$REALITY_DOMAINS" | tr ' ' '\n' | grep -Fxiq "$domain"; then
@@ -27,7 +38,7 @@ validate_router() {
         fi
     done < "$work/domains"
     python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
-        --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format config > "$work/router.cfg" || return 1
+        --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" "${pending_args[@]}" --format config > "$work/router.cfg" || return 1
     haproxy -c -f "$work/router.cfg" || return 1
 }
 
@@ -38,15 +49,15 @@ case "${1:-status}" in
         trap 'rm -rf "$work"' EXIT
         validate_router "$1"
         python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
-            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format plan
+            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" "${pending_args[@]}" --format plan
         [ "$1" != plan ] || exit 0
         validate_reality_runtime
         # Test that each intended Xray backend is already listening and can
         # serve the correct trusted site for unauthenticated probes.
         python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
-            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --check-backends
+            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" "${pending_args[@]}" --check-backends
         python3 "$renderer" --db "${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}" \
-            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" --format config > "$work/current.cfg"
+            --ids "${XUI_SNI_ROUTER_INBOUNDS:-}" --fallback-port "$SELFSTEAL_PORT" "${pending_args[@]}" --format config > "$work/current.cfg"
         if ! cmp -s "$work/router.cfg" "$work/current.cfg"; then
             echo "[ERROR] Выбранные маршруты изменились во время проверки; повторите plan/apply после сохранения формы" >&2
             exit 1
@@ -68,9 +79,14 @@ case "${1:-status}" in
             echo "[ERROR] TCP443 занят. Сначала загрузите БД с локальными портами и примените конфигурацию панели. Чужие процессы не останавливаются" >&2
             exit 1
         fi
+        if [ "$was_active" -eq 1 ] && [ -f "$config" ] && cmp -s "$config" "$work/router.cfg"; then
+            echo "[KEEP] Конфигурация SNI-router совпадает; reload/restart не нужен"
+            exit 0
+        fi
         [ ! -f "$config" ] || cp -p "$config" "$work/old.cfg"
         [ ! -f "/etc/systemd/system/$unit" ] || cp -p "/etc/systemd/system/$unit" "$work/old.unit"
-        install -m 0600 "$work/router.cfg" "$config"
+        install -m 0600 "$work/router.cfg" "${config}.next"
+        mv -f "${config}.next" "$config"
         cat > "/etc/systemd/system/$unit" <<EOF
 [Unit]
 Description=3x-ui dedicated SNI passthrough router (no TLS termination)
@@ -80,19 +96,25 @@ After=network.target x-ui.service x-ui-decoy.service
 Type=simple
 ExecStartPre=$(command -v haproxy) -c -f ${config}
 ExecStart=$(command -v haproxy) -W -db -f ${config}
+ExecReload=$(command -v haproxy) -c -f ${config}
+ExecReload=/bin/kill -s USR2 \$MAINPID
 Restart=on-failure
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 EOF
-        if ! systemctl daemon-reload || ! systemctl restart "$unit" || ! systemctl is-active --quiet "$unit"; then
+        action=start
+        [ "$was_active" -ne 1 ] || action=reload
+        if ! systemctl daemon-reload || ! systemctl "$action" "$unit" || ! systemctl is-active --quiet "$unit"; then
             echo "[ERROR] Router не запущен; восстанавливаю предыдущие файлы" >&2
-            systemctl stop "$unit" || true
+            if [ "$was_active" -eq 0 ]; then systemctl stop "$unit" || true; fi
             if [ -f "$work/old.cfg" ]; then cp -p "$work/old.cfg" "$config"; else rm -f "$config"; fi
             if [ -f "$work/old.unit" ]; then cp -p "$work/old.unit" "/etc/systemd/system/$unit"; else rm -f "/etc/systemd/system/$unit"; fi
             systemctl daemon-reload || true
-            [ "$was_active" -ne 1 ] || systemctl start "$unit" || true
+            if [ "$was_active" -eq 1 ]; then
+                systemctl kill --kill-who=main -s USR2 "$unit" || true
+            fi
             exit 1
         fi
         systemctl enable "$unit" >/dev/null

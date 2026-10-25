@@ -80,6 +80,12 @@ openssl() {{ return 1; }}
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("--standalone --http-01-port 80", self.calls.read_text())
 
+    def test_controller_does_not_run_global_directory_deploy_hooks(self):
+        self.env.update(XUI_PANEL_CONTROLLER_ENABLE="true", XUI_PANEL_CONTROLLER_CONTEXT="1")
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("--no-directory-hooks", self.calls.read_text())
+
     def test_haproxy_uses_existing_backend_without_stopping_it(self):
         result = self.run_helper("haproxy.service")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

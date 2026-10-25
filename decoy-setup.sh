@@ -11,12 +11,26 @@ CONFIG_DIR="${XUI_CONFIG_DIR:-/etc/x-ui}"
 ENV_FILE="${XUI_ENV_FILE:-${CONFIG_DIR}/.env}"
 [ -f "$ENV_FILE" ] || ENV_FILE="${SCRIPT_DIR}/.env"
 
+_controller_scope=()
+if [ "${XUI_PANEL_CONTROLLER_ENABLE:-}" = true ] && [ "${XUI_PANEL_CONTROLLER_CONTEXT:-}" = 1 ]; then
+    # Scope comes from the root controller's checked plan, not from shell code.
+    # Re-sourcing the normal .env must not silently replace its DB/domain set.
+    for _scope_name in XUI_DB_PATH XUI_SELFSTEAL_DOMAIN XUI_SELFSTEAL_EXTRA_DOMAINS \
+        XUI_SNI_ROUTER_INBOUNDS XUI_SELFSTEAL_PORT XUI_AUTO_DB_APPLY \
+        XUI_SNI_ROUTER_ENABLE XUI_SELFSTEAL_ENABLE XUI_SELFSTEAL_MODE \
+        XUI_SELFSTEAL_PUBLIC XUI_HAPROXY_ENABLE XUI_AUTO_CERTS \
+        XUI_REWRITE_INBOUNDS XUI_HOSTS_SYNC XUI_PANEL_CONTROLLER_ENABLE XUI_PANEL_CONTROLLER_CONTEXT; do
+        if [[ -v $_scope_name ]]; then _controller_scope+=("${_scope_name}=${!_scope_name}"); fi
+    done
+fi
 if [ -f "$ENV_FILE" ]; then
     set -a
     # shellcheck disable=SC1090
     . "$ENV_FILE"
     set +a
 fi
+for _scope_value in "${_controller_scope[@]}"; do export "$_scope_value"; done
+unset _controller_scope _scope_name _scope_value
 . "${SCRIPT_DIR}/fork-policy.sh"
 
 DECOY_ROOT="${SCRIPT_DIR}/decoy"
@@ -319,7 +333,7 @@ setup_reality_service() {
     fi
     validate_reality_config || return 1
     validate_reality_runtime || return 1
-    local current_installed="" tmp_cfg backup_dir was_active=0
+    local current_installed="" tmp_cfg backup_dir was_active=0 service_action=start
     [ -f "${PUBLIC_DIR}/.current_template" ] && current_installed=$(cat "${PUBLIC_DIR}/.current_template")
     if [ ! -f "${PUBLIC_DIR}/index.html" ] || [ "$current_installed" != "$SELFSTEAL_TEMPLATE" ]; then
         switch_template "$SELFSTEAL_TEMPLATE" || return 1
@@ -337,11 +351,13 @@ setup_reality_service() {
     if [ -f "$NGINX_CONF" ]; then cp -p "$NGINX_CONF" "$backup_dir/nginx.conf" || return 1; fi
     if [ -f "$SERVICE_FILE" ]; then cp -p "$SERVICE_FILE" "$backup_dir/service" || return 1; fi
     systemctl is-active --quiet x-ui-decoy.service && was_active=1
+    [ "$was_active" -ne 1 ] || service_action=reload
     mkdir -p "$(dirname "$NGINX_CONF")" || return 1
     if [ -f "$NGINX_CONF" ] && [ ! -f "${NGINX_CONF}.pre-reality" ]; then
         cp -p "$NGINX_CONF" "${NGINX_CONF}.pre-reality"
     fi
-    install -m 0600 "$tmp_cfg" "$NGINX_CONF" || return 1
+    install -m 0600 "$tmp_cfg" "${NGINX_CONF}.next" || return 1
+    mv -f "${NGINX_CONF}.next" "$NGINX_CONF" || return 1
     rm -f "$tmp_cfg"
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -363,16 +379,16 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
-    if ! systemctl daemon-reload || ! systemctl restart x-ui-decoy.service ||
+    if ! systemctl daemon-reload || ! systemctl "$service_action" x-ui-decoy.service ||
        ! curl --fail --silent --show-error --max-time 10 --noproxy '*' \
            --haproxy-protocol --unix-socket "$REALITY_SOCKET" \
            "https://${REALITY_DOMAIN}/" -o /dev/null; then
         echo "[SELFSTEAL-ERROR] Запуск/HTTPS через Unix-сокет не прошёл проверку; восстанавливаю прежнюю службу" >&2
-        systemctl stop x-ui-decoy.service >/dev/null 2>&1 || true
+        if [ "$was_active" -eq 0 ]; then systemctl stop x-ui-decoy.service >/dev/null 2>&1 || true; fi
         if [ -f "$backup_dir/nginx.conf" ]; then cp -p "$backup_dir/nginx.conf" "$NGINX_CONF"; else rm -f "$NGINX_CONF"; fi
         if [ -f "$backup_dir/service" ]; then cp -p "$backup_dir/service" "$SERVICE_FILE"; else rm -f "$SERVICE_FILE"; fi
         systemctl daemon-reload || true
-        if [ "$was_active" -eq 1 ]; then systemctl start x-ui-decoy.service || true; fi
+        if [ "$was_active" -eq 1 ]; then systemctl reload x-ui-decoy.service || true; fi
         rm -rf "$backup_dir"
         return 1
     fi

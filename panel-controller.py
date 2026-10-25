@@ -9,7 +9,7 @@ check requires root, Linux/systemd and no Docker/container marker. Tests inject
 runner(argv, env), health(routes), and native_check(); no shell is ever used.
 Workers receive XUI_DB_PATH, explicit domain/ID lists and XUI_AUTO_DB_APPLY=false:
   decoy-setup.sh certificate
-  decoy-setup.sh apply                 # integrator must implement safe reload
+  decoy-setup.sh apply                 # safe reload when already active
   sni-router.sh apply --managed-pending
 The last flag MUST include only fork-managed,fork-pending disabled Hosts, never
 ordinary disabled Hosts. Wrappers must preserve the supplied DB/domain/ID scope
@@ -30,8 +30,8 @@ Safety exceptions / intentionally limited reconciliation
 * State stores only public-field digests and DB device/inode, never streams,
   keys, client IDs or rollback snapshots. Secret-only edits do not trigger work.
   Missing state is a cold start: CA/site/health/router are checked again. Source
-  guards include full in-memory rows, so even concurrent traffic/metadata updates
-  can conservatively abort a pass; the next watch tick takes a fresh snapshot.
+   guards include in-memory configuration rows. Inbound up/down counters are
+   excluded so normal live traffic cannot starve certificate reconciliation.
 * DB replacement is detected at phase/transaction boundaries, not serialized
   against an uncooperative atomic restore during a SQLite commit. Stop the worker
   before restoring databases. An ABA edit restored byte-for-byte is undetectable
@@ -175,7 +175,8 @@ def snapshot(conn):
     if not REQUIRED <= {row[1] for row in schema}:
         raise ControllerError("required Hosts columns are missing")
     # Full snapshots are in memory only, never hashed, logged or serialized.
-    inbounds = [dict(row) for row in conn.execute("SELECT * FROM inbounds ORDER BY id")]
+    inbounds = [{key: row[key] for key in row.keys() if key not in ("up", "down")}
+                for row in conn.execute("SELECT * FROM inbounds ORDER BY id")]
     hosts = [dict(row) for row in conn.execute("SELECT * FROM hosts ORDER BY id")]
     return schema, inbounds, hosts
 
@@ -264,6 +265,11 @@ def build_plan(conn, db_identity, backend_port):
         if stream.get("security") != "reality":
             continue
         inbound_id, address, port = inbound["id"], inbound.get("listen"), inbound.get("port")
+        if address not in ("127.0.0.1", "::1"):
+            # Direct/public profiles are outside this controller's ownership.
+            # They must not block already prepared loopback profiles.
+            skipped.append(inbound_id)
+            continue
         if (address not in ("127.0.0.1", "::1") or type(port) is not int or
                 not 1024 <= port <= 65535 or port in (443, backend_port)):
             raise ControllerError("REALITY requires a prepared non-looping loopback port")
@@ -307,6 +313,10 @@ def build_plan(conn, db_identity, backend_port):
                 public_hosts.extend({k: h[k] for k in PUBLIC_HOST} for h in manual)
             else:
                 managed = [h for h in own if str(h["sni"] or "").lower() == name]
+                if not managed and len(names) == 1 and len(own) == 1:
+                    # Common rename: keep the identity of the uniquely owned
+                    # Host instead of leaving an obsolete published duplicate.
+                    managed = own
                 if len(managed) > 1:
                     raise ControllerError("ambiguous managed Hosts for one SNI")
                 host = managed[0] if managed else None
@@ -332,7 +342,8 @@ def build_plan(conn, db_identity, backend_port):
 
 def run_command(argv, env):
     # Do not leak worker output (which may contain credentials) into daemon logs.
-    return subprocess.run(argv, env=env, stdin=subprocess.DEVNULL,
+    command = [shutil.which("bash") or "/bin/bash", *argv] if argv[0].endswith(".sh") else argv
+    return subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                           timeout=600, check=True)
 
@@ -591,7 +602,20 @@ class Controller:
         self.check_context(plan)
         env = dict(self.env)
         domains = sorted({route.domain for route in plan.routes})
+        primary = env.get("XUI_SELFSTEAL_DOMAIN")
+        if primary not in domains:
+            first = plan.routes[0]
+            inbound = next(row for row in plan.source[1] if row["id"] == first.inbound_id)
+            names = json.loads(inbound["stream_settings"])["realitySettings"]["serverNames"]
+            primary = next(name.lower() for name in names if name.lower() in domains)
+        domains.remove(primary)
+        domains.insert(0, primary)
         env.update(XUI_DB_PATH=str(self.db), XUI_AUTO_DB_APPLY="false",
+                   XUI_PANEL_CONTROLLER_CONTEXT="1",
+                   XUI_SNI_ROUTER_ENABLE="true", XUI_SELFSTEAL_ENABLE="true",
+                   XUI_SELFSTEAL_MODE="reality", XUI_SELFSTEAL_PUBLIC="false",
+                   XUI_HAPROXY_ENABLE="false", XUI_AUTO_CERTS="false",
+                   XUI_REWRITE_INBOUNDS="false", XUI_HOSTS_SYNC="false",
                    XUI_SELFSTEAL_DOMAIN=domains[0],
                    XUI_SELFSTEAL_EXTRA_DOMAINS=",".join(domains[1:]),
                    XUI_SNI_ROUTER_INBOUNDS=",".join(str(n) for n in sorted(
@@ -617,7 +641,11 @@ class Controller:
     def _apply_plan(self, plan, dry_run=False):
         # Internal phase driver. Public entry points are plan() and run_once().
         if dry_run:
-            return dict(plan.summary(), status="planned")
+            return dict(plan.summary(), status="planned",
+                        profiles=[{"inbound": r.inbound_id, "domain": r.domain,
+                                   "backend": f"{r.address}:{r.port}"} for r in plan.routes],
+                        hosts=[{"inbound": a.inbound_id, "host_id": a.host_id,
+                                "domain": a.domain, "fields": sorted(a.values)} for a in plan.actions])
         if not self.native_check():
             raise ControllerError("controller apply requires native root/systemd runtime")
         if not plan.routes:
@@ -687,14 +715,31 @@ def main(argv=None):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     last = None
+    failed_token, retry_at, failures = None, 0.0, 0
     while running:
         status = 0
+        token = None
         try:
-            result = Controller(args.db, args.state_dir, args.scripts_dir).run_once(args.dry_run)
+            controller = Controller(args.db, args.state_dir, args.scripts_dir)
+            if args.watch and controller.env.get("XUI_PANEL_CONTROLLER_ENABLE") == "true":
+                pending = controller.plan()
+                token = digest([pending.site_digest, pending.router_digest, pending.host_digest,
+                                [[a.inbound_id, a.domain, a.host_id, a.values] for a in pending.actions]])
+                if token == failed_token and time.monotonic() < retry_at:
+                    time.sleep(args.interval)
+                    continue
+            result = controller.run_once(args.dry_run)
+            failed_token, retry_at, failures = None, 0.0, 0
             message = "[CONTROLLER] " + json.dumps(result, sort_keys=True)
         except (ControllerError, sqlite3.Error, OSError) as error:
             detail = str(error) if isinstance(error, ControllerError) else "DB/state/access failure"
             message, status = "[ERROR] " + detail, 1
+            if args.watch:
+                failures = failures + 1 if token == failed_token else 1
+                failed_token = token
+                delay = min(300, 5 * (2 ** min(failures - 1, 6)))
+                retry_at = time.monotonic() + delay
+                message += f"; unchanged configuration retry in {delay}s"
         if message != last:
             print(message, flush=True)
             last = message

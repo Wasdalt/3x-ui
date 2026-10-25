@@ -45,7 +45,22 @@ def valid_domain(value):
                          r"[a-zA-Z](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", value))
 
 
-def load_routes(path, ids, backend_port=10444):
+def controller_host_allowed(disabled, tag_value, include_pending=False):
+    if disabled in (0, None):
+        return True
+    if disabled != 1 or not include_pending or not isinstance(tag_value, str):
+        return False
+    try:
+        parsed = json.loads(tag_value) if tag_value.lstrip().startswith("[") else tag_value.split(",")
+    except ValueError:
+        return False
+    if not isinstance(parsed, list) or any(not isinstance(value, str) for value in parsed):
+        return False
+    names = {value.strip() for value in parsed}
+    return {"fork-managed", "fork-pending"} <= names
+
+
+def load_routes(path, ids, backend_port=10444, include_managed_pending=False):
     path = Path(path).resolve()
     if not path.is_file():
         raise RouterError("Database missing; no new database is created")
@@ -54,17 +69,23 @@ def load_routes(path, ids, backend_port=10444):
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
             conn.execute("PRAGMA query_only=ON")
             conn.execute("BEGIN")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(hosts)")}
+            if include_managed_pending and "tags" not in columns:
+                raise RouterError("Managed-pending routing requires Hosts ownership tags")
+            tag_column = "h.tags" if "tags" in columns else "''"
             if not ids:
                 # Prepared loopback REALITY + existing enabled external443 Host
                 # expresses intent in the panel. Never make a public inbound
                 # private or create/repair a Host merely to discover a route.
                 ids = []
-                candidates = conn.execute("""SELECT DISTINCT i.id,i.stream_settings FROM inbounds i
+                candidates = conn.execute(f"""SELECT i.id,i.stream_settings,h.is_disabled,{tag_column} FROM inbounds i
                     JOIN hosts h ON h.inbound_id=i.id WHERE i.enable=1
                     AND i.listen IN ('127.0.0.1','::1') AND i.port<>443
-                    AND h.port=443 AND COALESCE(h.is_disabled,0)=0
+                    AND h.port=443
                     AND h.security IN ('reality','same','') ORDER BY i.id""").fetchall()
-                for inbound_id, raw in candidates:
+                for inbound_id, raw, disabled, host_tags in candidates:
+                    if not controller_host_allowed(disabled, host_tags, include_managed_pending):
+                        continue
                     try:
                         candidate = json.loads(raw or "{}")
                     except (ValueError, TypeError):
@@ -72,7 +93,8 @@ def load_routes(path, ids, backend_port=10444):
                     if (isinstance(candidate, dict) and candidate.get("security") == "reality"
                             and isinstance(candidate.get("realitySettings"), dict)
                             and candidate["realitySettings"].get("target") == "/run/x-ui-selfsteal/https.sock"):
-                        ids.append(inbound_id)
+                        if inbound_id not in ids:
+                            ids.append(inbound_id)
                 if not ids:
                     raise RouterError("No prepared SNI profiles found: configure loopback REALITY inbounds and active external443 Hosts in the panel first")
             for inbound_id in ids:
@@ -106,10 +128,11 @@ def load_routes(path, ids, backend_port=10444):
                 names = reality.get("serverNames")
                 if not isinstance(names, list) or not names:
                     raise RouterError(f"Inbound {inbound_id}: explicit serverNames required")
-                host_snis = conn.execute("""SELECT sni FROM hosts WHERE inbound_id=? AND port=443
-                    AND COALESCE(is_disabled,0)=0 AND security IN ('reality','same','')""", (inbound_id,)).fetchall()
-                if not host_snis or not any((sni or "").lower() in [str(n).lower() for n in names]
-                                            for (sni,) in host_snis):
+                host_snis = conn.execute(f"""SELECT h.sni,h.is_disabled,{tag_column} FROM hosts h
+                    WHERE h.inbound_id=? AND h.port=443 AND h.security IN ('reality','same','')""", (inbound_id,)).fetchall()
+                if not host_snis or not any(controller_host_allowed(disabled, host_tags, include_managed_pending)
+                        and (sni or "").lower() in [str(n).lower() for n in names]
+                        for sni, disabled, host_tags in host_snis):
                     raise RouterError(f"Inbound {inbound_id}: external443 Host SNI must match a configured serverName; Host is not rewritten automatically")
                 for domain in names:
                     if not valid_domain(domain):
@@ -169,9 +192,10 @@ def main():
     parser.add_argument("--fallback-port", type=int, default=10444)
     parser.add_argument("--format", choices=("config", "domains", "plan"), default="plan")
     parser.add_argument("--check-backends", action="store_true")
+    parser.add_argument("--include-managed-pending", action="store_true")
     args = parser.parse_args()
     try:
-        routes = load_routes(args.db, parse_ids(args.ids), args.fallback_port)
+        routes = load_routes(args.db, parse_ids(args.ids), args.fallback_port, args.include_managed_pending)
         config = render_config(routes, args.fallback_port)
         if args.check_backends:
             check_backends(routes)
