@@ -48,6 +48,25 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn("secret-injection", result.stdout)
         self.assertNotEqual(self.shell("fork_policy_enabled 'XUI_X;echo injected'").returncode, 0)
 
+    def test_template_auto_discovery_does_not_enable_mutating_automation(self):
+        assignments = [line.split("=", 1) for line in (ROOT / ".env.example").read_text().splitlines()
+                       if line.startswith("XUI_") and "=" in line]
+        values = dict(assignments)
+        expected = {"XUI_SELFSTEAL_PROXY_INBOUNDS": "auto", "XUI_SELFSTEAL_DOMAIN": "",
+                    "XUI_SELFSTEAL_EXTRA_DOMAINS": "", "XUI_SELFSTEAL_MODE": "legacy"}
+        for flag in ("XUI_SELFSTEAL_ENABLE", "XUI_SELFSTEAL_PUBLIC", "XUI_PANEL_CONTROLLER_ENABLE",
+                     "XUI_HAPROXY_ENABLE", "XUI_SNI_ROUTER_ENABLE", "XUI_HOSTS_SYNC",
+                     "XUI_HOSTS_INHERIT_TLS", "XUI_AUTO_DB_APPLY", "XUI_AUTO_CERTS",
+                     "XUI_AUTO_CERT_DOMAINS", "XUI_REWRITE_INBOUNDS", "XUI_SYNC_INBOUND_CERTS",
+                     "XUI_TUNE_NETWORK", "XUI_CLEANUP_ORPHANS", "XUI_DB_MAINTENANCE",
+                     "XUI_MANAGE_SYSTEM_NGINX", "XUI_CERTBOT_STOP_WEB_SERVER",
+                     "XUI_REPAIR_XRAY_TEMPLATE", "XUI_SELFSTEAL_ALLOW_FALLBACK_CERT"):
+            expected[flag] = "false"
+        for key, value in expected.items():
+            with self.subTest(key=key):
+                self.assertEqual(sum(name == key for name, _ in assignments), 1)
+                self.assertEqual(values.get(key), value)
+
     def test_summary_and_setting_logs_do_not_print_values(self):
         result = self.shell('fork_setting_log CHANGE tgBotToken "explicit env"; '
                             'fork_setting_log KEEP webBasePath "unchanged"; '
