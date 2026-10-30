@@ -24,7 +24,7 @@ sync_shell_file() {
 
     [ -f "$source_file" ] || return 0
 
-    if ! sh -n "$source_file" >/dev/null 2>&1; then
+    if ! bash -n "$source_file" >/dev/null 2>&1; then
         echo "[FORK-SYNC] Skip invalid shell file: $source_file"
         return 0
     fi

@@ -232,6 +232,26 @@ _configure_xray_logging
         self.assertEqual(self.db.read_bytes(), before)
         self.assertEqual(config.read_text(), '{"routing":{"rules":[]}}')
 
+    def test_fork_sync_syncs_bash_files(self):
+        with tempfile.TemporaryDirectory(prefix="fork-sync-") as tmp:
+            tmp_path = Path(tmp)
+            xui_dir = tmp_path / "xui"
+            xui_dir.mkdir()
+            script = ROOT / "fork-sync.sh"
+            result = subprocess.run(["sh", str(script)],
+                                    env=clean_environment(
+                                        XUI_DIR=str(xui_dir),
+                                        XUI_CONFIG_DIR=str(tmp_path),
+                                        XUI_FORK_PROJECT_DIR=str(ROOT),
+                                    ),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Skip invalid shell file", result.stdout)
+            self.assertTrue((xui_dir / "decoy-setup.sh").is_file())
+            self.assertTrue((xui_dir / "sni-router.sh").is_file())
+            self.assertTrue((xui_dir / "hosts-tls-inherit.sh").is_file())
+            self.assertTrue((xui_dir / "panel-controller.sh").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
