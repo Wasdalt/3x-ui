@@ -174,6 +174,7 @@ Commands:
   restore   Restore database from backup file and apply configuration (optional: [file])
   haproxy   Show HAProxy container/service status, logs and config
   selfsteal Manage SelfSteal (status, plan, validate, certificate, apply, templates)
+  hosts     Synchronize subscription Hosts with inbounds (sync, status)
   hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
   sni-router Dedicated common TCP443 router (plan, apply, status, stop); no DB rewrite
   controller Managed Host/certificate/router cycle (plan, once, install, status, log, stop)
@@ -423,6 +424,41 @@ case "${1:-help}" in
             exec bash "${PROJECT_DIR}/sni-router.sh" "$@"
         fi
         exec bash /usr/local/x-ui/sni-router.sh "$@"
+        ;;
+    hosts|sync-hosts)
+        need_root
+        subcmd="${2:-sync}"
+        case "$subcmd" in
+            sync|apply)
+                init_script=""
+                if [ -x "${PROJECT_DIR}/init-config.sh" ]; then
+                    init_script="${PROJECT_DIR}/init-config.sh"
+                elif [ -x "/usr/local/x-ui/init-config.sh" ]; then
+                    init_script="/usr/local/x-ui/init-config.sh"
+                fi
+                if [ -n "$init_script" ]; then
+                    echo -e "${yellow}Синхронизация таблицы hosts с входящими...${plain}"
+                    XUI_HOSTS_SYNC=true "$init_script" --hosts-sync
+                    echo -e "${green}✓ Таблица hosts синхронизирована с входящими${plain}"
+                else
+                    echo -e "${red}init-config.sh не найден${plain}"
+                    exit 1
+                fi
+                ;;
+            status|list)
+                if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+                    echo -e "${green}=== Текущие Hosts в БД ===${plain}"
+                    sqlite3 -header -column "$DB_PATH" "SELECT id, inbound_id, remark, address, port, sni, security FROM hosts ORDER BY id;"
+                else
+                    echo -e "${red}База данных не найдена: $DB_PATH${plain}"
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "Использование: x-ui-fork hosts {sync|status}"
+                exit 1
+                ;;
+        esac
         ;;
     hosts-inherit)
         need_root

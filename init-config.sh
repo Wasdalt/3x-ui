@@ -687,13 +687,12 @@ sync_haproxy_and_hosts() {
     # Do not run legacy bind/target fixes, forced-443 mappings or externalProxy
     # cleanup: they would overwrite HTTP clients using a non-443 frontend.
     if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
-        echo "[SELFSTEAL] Applying local REALITY/HTTPS backend; legacy inbound/Hosts sync skipped"
+        echo "[SELFSTEAL] Applying local REALITY/HTTPS backend; legacy HAProxy config skipped"
         if ! bash "${SCRIPT_DIR}/decoy-setup.sh" apply; then
             fork_warn "Заглушка SelfSteal не применена (нет валидного сертификата). Панель продолжит работу" 2>/dev/null || echo "[SELFSTEAL-WARN] Заглушка SelfSteal не применена. Панель продолжит работу" >&2
         fi
-        return 0
-    fi
-    haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
+    else
+        haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
 
     haproxy_enabled=1
     case "${XUI_HAPROXY_ENABLE:-false}" in
@@ -1152,6 +1151,7 @@ EOF_BK_CERTBOT
             fi
         fi
     fi
+    fi
 
     # 5. Synchronize hosts table (nodes for subscriptions)
     # Hosts are client profiles, not a mirror of the server stream settings.
@@ -1369,12 +1369,26 @@ ORDER BY id ASC;
 
             # Determine if SNI belongs to our managed domain
             sni_is_ours=0
-            if [ -n "$sni" ] && [ -f "/etc/letsencrypt/live/${sni}/fullchain.pem" ]; then
+            reality_target=$(echo "$stream" | jq -r '.realitySettings.target // ""' 2>/dev/null || echo "")
+            case "$reality_target" in
+                /run/x-ui-selfsteal/*|127.0.0.1:*|localhost:*)
+                    [ -n "$sni" ] && sni_is_ours=1
+                    ;;
+            esac
+            if [ "$sni_is_ours" -eq 0 ] && [ -n "$sni" ] && [ -f "/etc/letsencrypt/live/${sni}/fullchain.pem" ]; then
                 sni_is_ours=1
-            elif [ -n "$sni" ]; then
+            elif [ "$sni_is_ours" -eq 0 ] && [ -n "$sni" ] && [ -n "$target_domain" ]; then
                 case "$sni" in
                     *"${target_domain}"*) sni_is_ours=1 ;;
                 esac
+                if [ "$sni_is_ours" -eq 0 ]; then
+                    target_parent=$(printf '%s' "$target_domain" | cut -d. -f2- || echo "")
+                    if [ -n "$target_parent" ] && [ "$target_parent" != "$target_domain" ]; then
+                        case "$sni" in
+                            *"${target_parent}") sni_is_ours=1 ;;
+                        esac
+                    fi
+                fi
             fi
 
             if [ -n "$existing_host" ]; then
@@ -1382,6 +1396,8 @@ ORDER BY id ASC;
                     host_addr="$XUI_HOSTS_ADDRESS"
                 elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
                     host_addr="$public_server_ip"
+                elif [ "$sec" = "reality" ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
+                    host_addr="$sni"
                 elif [ "$sni_is_ours" -eq 1 ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
@@ -1405,7 +1421,7 @@ ORDER BY id ASC;
 
                 if [ "$curr_dis" = "1" ]; then
                     host_port="$port"
-                elif [ "$curr_port" = "443" ]; then
+                elif [ "$haproxy_enabled" -eq 1 ] && [ "$curr_port" = "443" ]; then
                     host_port=443
                 else
                     host_port="$target_port"
@@ -1431,6 +1447,8 @@ WHERE id = ${host_id};
                     host_addr="$XUI_HOSTS_ADDRESS"
                 elif [ "$hosts_use_ip" -eq 1 ] && [ -n "$public_server_ip" ] && [ "$public_server_ip" != "127.0.0.1" ]; then
                     host_addr="$public_server_ip"
+                elif [ "$sec" = "reality" ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
+                    host_addr="$sni"
                 elif [ "$sni_is_ours" -eq 1 ] && [ -n "$sni" ] && [ "$sni" != "127.0.0.1" ] && [ "$sni" != "localhost" ]; then
                     host_addr="$sni"
                 elif [ -n "$def_host_addr" ]; then
@@ -1487,6 +1505,7 @@ AND sni IN (
     fi
 
     # 6. Clean legacy externalProxy from inbounds.stream_settings
+    if [ "${XUI_SELFSTEAL_MODE:-legacy}" != "reality" ]; then
     if fork_allow XUI_REWRITE_INBOUNDS "Удаление legacy externalProxy из входящих"; then
     rows_ext=$(sqlite_db -separator '|' "
 SELECT id, stream_settings
@@ -1506,7 +1525,16 @@ WHERE stream_settings LIKE '%externalProxy%';
         done
     fi
     fi
+    fi
 }
+
+if [ "${1:-}" = "--hosts-sync" ] || [ "${1:-}" = "sync-hosts" ]; then
+    XUI_HOSTS_SYNC=true
+    target_dom=$(get_setting_value "webDomain")
+    [ -n "$target_dom" ] || target_dom="${XUI_DOMAIN:-}"
+    sync_haproxy_and_hosts "$target_dom"
+    exit 0
+fi
 
 # ============================================================================
 # Domain Detection

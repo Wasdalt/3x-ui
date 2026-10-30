@@ -131,6 +131,32 @@ haproxy_enabled=0
         self.assertNotIn("has_vision", SOURCE)
         self.assertNotIn('fp="firefox"', SOURCE)
 
+    def test_opt_in_syncs_reality_server_names_into_hosts_address_and_sni(self):
+        self.set_stream({"network": "tcp", "security": "reality",
+                         "realitySettings": {"serverNames": ["studio.f1.netstability.ru"],
+                                             "target": "/run/x-ui-selfsteal/https.sock"}})
+        result = self.run_section("true")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        row = self.row()
+        self.assertEqual(row["address"], "studio.f1.netstability.ru")
+        self.assertEqual(row["sni"], "studio.f1.netstability.ru")
+        self.assertEqual(row["security"], "reality")
+        self.assertEqual(int(row["port"]), 10443)
+
+    def test_init_config_cli_hosts_sync(self):
+        self.set_stream({"network": "tcp", "security": "reality",
+                         "realitySettings": {"serverNames": ["media.f1.netstability.ru"],
+                                             "target": "/run/x-ui-selfsteal/https.sock"}})
+        env = os.environ.copy()
+        env.update(XUI_DB_PATH=str(self.db), XUI_SELFSTEAL_MODE="reality",
+                   XUI_SELFSTEAL_ENABLE="false")
+        result = subprocess.run(["bash", str(ROOT / "init-config.sh"), "--hosts-sync"],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.row()
+        self.assertEqual(row["address"], "media.f1.netstability.ru")
+        self.assertEqual(row["sni"], "media.f1.netstability.ru")
+
 
 if __name__ == "__main__":
     unittest.main()
