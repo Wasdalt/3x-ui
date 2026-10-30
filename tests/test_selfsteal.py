@@ -441,6 +441,25 @@ sync_haproxy_and_hosts edge.example.com
                 server.terminate()
                 server.communicate(timeout=5)
 
+    def test_reality_mode_soft_fails_without_blocking_init_config(self):
+        source = (ROOT / "init-config.sh").read_text()
+        start = source.index("if fork_policy_enabled XUI_SELFSTEAL_ENABLE; then")
+        end = source.index("\n# Wait for database creation", start)
+        snippet = source[start:end]
+        body = f'''
+. "{ROOT / 'fork-policy.sh'}"
+SCRIPT_DIR="{ROOT}"
+export XUI_SELFSTEAL_ENABLE=true
+export XUI_SELFSTEAL_MODE=reality
+export XUI_SELFSTEAL_DOMAIN=test.example.com
+export XUI_SELFSTEAL_CERT_FILE=/nonexistent.pem
+export XUI_SELFSTEAL_KEY_FILE=/nonexistent.pem
+{snippet}
+'''
+        result = subprocess.run(["bash", "-c", body], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SelfSteal (REALITY) не готов", result.stderr + result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

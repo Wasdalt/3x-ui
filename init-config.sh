@@ -36,17 +36,19 @@ DB_PATH="${XUI_DB_PATH:-/etc/x-ui/x-ui.db}"
 
 # Fail before database updates, orphan cleanup or service changes when the new
 # opt-in mode is misconfigured. Legacy installations retain their old behavior.
-case "${XUI_SELFSTEAL_MODE:-legacy}" in
-    legacy) ;;
-    reality)
-        if [ ! -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
-            echo "[SELFSTEAL-ERROR] decoy-setup.sh отсутствует" >&2
-            exit 1
-        fi
-        bash "${SCRIPT_DIR}/decoy-setup.sh" validate || exit 1
-        ;;
-    *) echo "[SELFSTEAL-ERROR] Неизвестный XUI_SELFSTEAL_MODE" >&2; exit 1 ;;
-esac
+if fork_policy_enabled XUI_SELFSTEAL_ENABLE; then
+    case "${XUI_SELFSTEAL_MODE:-legacy}" in
+        legacy) ;;
+        reality)
+            if [ ! -f "${SCRIPT_DIR}/decoy-setup.sh" ]; then
+                fork_warn "decoy-setup.sh отсутствует; сайт-заглушка пропущена"
+            elif ! bash "${SCRIPT_DIR}/decoy-setup.sh" validate; then
+                fork_warn "SelfSteal (REALITY) не готов: сертификат отсутствует или недействителен. Запуск заглушки отложен, панель запускается"
+            fi
+            ;;
+        *) fork_warn "Неизвестный XUI_SELFSTEAL_MODE" ;;
+    esac
+fi
 
 # Wait for database creation / Ждём создания БД
 for i in $(seq 1 30); do
@@ -684,9 +686,11 @@ sync_haproxy_and_hosts() {
     # This mode has explicit frontend/backend ports and manually managed Hosts.
     # Do not run legacy bind/target fixes, forced-443 mappings or externalProxy
     # cleanup: they would overwrite HTTP clients using a non-443 frontend.
-            if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
+    if [ "${XUI_SELFSTEAL_MODE:-legacy}" = "reality" ]; then
         echo "[SELFSTEAL] Applying local REALITY/HTTPS backend; legacy inbound/Hosts sync skipped"
-        bash "${SCRIPT_DIR}/decoy-setup.sh" apply || return 1
+        if ! bash "${SCRIPT_DIR}/decoy-setup.sh" apply; then
+            fork_warn "Заглушка SelfSteal не применена (нет валидного сертификата). Панель продолжит работу" 2>/dev/null || echo "[SELFSTEAL-WARN] Заглушка SelfSteal не применена. Панель продолжит работу" >&2
+        fi
         return 0
     fi
     haproxy_cfg_file="${XUI_HAPROXY_CFG:-/etc/x-ui/haproxy.cfg}"
