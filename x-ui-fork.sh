@@ -333,14 +333,14 @@ case "${1:-help}" in
         echo -e "${green}✓ База данных скопирована в ${DB_PATH}${plain}"
 
         init_script=""
-        if [ -x "${PROJECT_DIR}/init-config.sh" ]; then
+        if [ -f "${PROJECT_DIR}/init-config.sh" ]; then
             init_script="${PROJECT_DIR}/init-config.sh"
-        elif [ -x "/usr/local/x-ui/init-config.sh" ]; then
+        elif [ -f "/usr/local/x-ui/init-config.sh" ]; then
             init_script="/usr/local/x-ui/init-config.sh"
         fi
         if [ -n "$init_script" ]; then
             echo -e "${yellow}Применение конфигурации и выпуск сертификатов...${plain}"
-            "$init_script" || true
+            bash "$init_script" || true
         fi
 
         systemctl restart x-ui 2>/dev/null || true
@@ -431,14 +431,14 @@ case "${1:-help}" in
         case "$subcmd" in
             sync|apply)
                 init_script=""
-                if [ -x "${PROJECT_DIR}/init-config.sh" ]; then
+                if [ -f "${PROJECT_DIR}/init-config.sh" ]; then
                     init_script="${PROJECT_DIR}/init-config.sh"
-                elif [ -x "/usr/local/x-ui/init-config.sh" ]; then
+                elif [ -f "/usr/local/x-ui/init-config.sh" ]; then
                     init_script="/usr/local/x-ui/init-config.sh"
                 fi
                 if [ -n "$init_script" ]; then
                     echo -e "${yellow}Синхронизация таблицы hosts с входящими...${plain}"
-                    XUI_HOSTS_SYNC=true "$init_script" --hosts-sync
+                    XUI_HOSTS_SYNC=true bash "$init_script" --hosts-sync
                     echo -e "${green}✓ Таблица hosts синхронизирована с входящими${plain}"
                 else
                     echo -e "${red}init-config.sh не найден${plain}"
