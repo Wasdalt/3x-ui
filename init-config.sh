@@ -1321,18 +1321,18 @@ ORDER BY id ASC;
                         target_port="$port"
                         host_sec="$sec"
                     elif [ "$sec" = "reality" ]; then
-                        if [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ "$port" = "443" ]; then
+                        if [ "$port" = "443" ]; then
                             target_port=443
-                        elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$sni" ]; then
+                        elif [ "$haproxy_enabled" -eq 1 ] && { [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ -n "$sni" ]; }; then
                             target_port=443
                         else
                             target_port="$port"
                         fi
                         host_sec="reality"
                     elif [ "$sec" = "tls" ]; then
-                        if [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ "$port" = "443" ]; then
+                        if [ "$port" = "443" ]; then
                             target_port=443
-                        elif [ "$haproxy_enabled" -eq 1 ] && [ -n "$sni" ]; then
+                        elif [ "$haproxy_enabled" -eq 1 ] && { [ "$force_all_443" -eq 1 ] || [ "$curr_port" = "443" ] || [ -n "$sni" ]; }; then
                             target_port=443
                         else
                             target_port="$port"
@@ -1733,8 +1733,8 @@ UNION
 SELECT sni FROM hosts WHERE security = 'tls' AND sni != '' AND sni NOT LIKE '127.%' AND sni NOT LIKE '0.0.%';
 " 2>/dev/null || true)
 
-        # Support XUI_EXTRA_DOMAINS from .env (space- or comma-separated list of arbitrary domains/subdomains)
-        env_extra_doms=$(echo "${XUI_EXTRA_DOMAINS:-}" | tr ',' ' ')
+        # Support XUI_EXTRA_DOMAINS and XUI_SELFSTEAL_EXTRA_DOMAINS from .env (space- or comma-separated list)
+        env_extra_doms=$(echo "${XUI_EXTRA_DOMAINS:-} ${XUI_SELFSTEAL_EXTRA_DOMAINS:-}" | tr ',' ' ')
 
         all_candidate_domains=$(echo "$db_tls_doms $db_reality_doms $db_settings_doms $db_hosts_doms ${XUI_DOMAIN:-} ${XUI_SUB_DOMAIN:-} ${XUI_HAPROXY_DOMAIN:-} ${XUI_SELFSTEAL_DOMAIN:-} $env_extra_doms" | tr ' ' '\n' | sort -u)
 

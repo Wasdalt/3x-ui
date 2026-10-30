@@ -143,6 +143,14 @@ haproxy_enabled=0
         self.assertEqual(row["security"], "reality")
         self.assertEqual(int(row["port"]), 10443)
 
+    def test_opt_in_resets_stale_443_port_when_haproxy_disabled(self):
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE hosts SET port=443 WHERE id=1")
+        result = self.run_section("true")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        row = self.row()
+        self.assertEqual(int(row["port"]), 10443)
+
     def test_init_config_cli_hosts_sync(self):
         self.set_stream({"network": "tcp", "security": "reality",
                          "realitySettings": {"serverNames": ["media.f1.netstability.ru"],
