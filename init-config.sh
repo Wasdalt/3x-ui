@@ -127,6 +127,13 @@ if fork_allow XUI_DB_MAINTENANCE "Переключение SQLite на WAL и у
     sqlite_db "DELETE FROM settings WHERE rowid NOT IN (SELECT MAX(rowid) FROM settings GROUP BY key);" >/dev/null 2>&1 || true
 fi
 
+# Sanitize corrupt string tgId in inbounds settings to prevent Go unmarshal errors
+sqlite_db "
+UPDATE inbounds
+SET settings = replace(replace(settings, '\"tgId\": \"\"', '\"tgId\": 0'), '\"tgId\":\"\"', '\"tgId\":0')
+WHERE settings LIKE '%\"tgId\": \"\"%' OR settings LIKE '%\"tgId\":\"\"%';
+" >/dev/null 2>&1 || true
+
 preserve_tls_setting() {
     case "$1" in
         webDomain|webCertFile|webKeyFile) [ "${PRESERVE_WEB_TLS:-0}" -eq 1 ] ;;

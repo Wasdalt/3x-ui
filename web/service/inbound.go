@@ -2229,6 +2229,8 @@ func (s *InboundService) MigrationRequirements() {
 						tgIdInt64, err := strconv.ParseInt(strings.ReplaceAll(tgIdStr, " ", ""), 10, 64)
 						if err == nil {
 							c["tgId"] = tgIdInt64
+						} else {
+							c["tgId"] = int64(0)
 						}
 					}
 				}

@@ -236,6 +236,10 @@ if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
     ln -sf "${SCRIPT_DIR}/x-ui-fork.sh" "${XUI_FORK_CLI}"
     echo "${SCRIPT_DIR}" > "${XUI_FORK_PROJECT_FILE}"
 fi
+if [ -f "${XUI_DIR}/x-ui.sh" ]; then
+    chmod +x "${XUI_DIR}/x-ui.sh"
+    ln -sf "${XUI_DIR}/x-ui.sh" /usr/bin/x-ui
+fi
 if [ -d "${SCRIPT_DIR}/decoy" ]; then
     mkdir -p "${XUI_DIR}/decoy"
     cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/"
