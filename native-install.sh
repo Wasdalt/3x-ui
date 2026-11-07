@@ -117,15 +117,27 @@ else
         fi
     }
 
+    nginx_was_active_before=0
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+        nginx_was_active_before=1
+    fi
+
     install_deps || {
         echo -e "${red}Ошибка при установке зависимостей (sqlite3, jq)${plain}"
         exit 1
     }
     echo -e "${green}  ✓ Зависимости проверены и установлены${plain}"
-    # Never delete the administrator's nginx configuration.
-    if fork_allow XUI_MANAGE_SYSTEM_NGINX "Остановка/отключение системного nginx" && command -v systemctl >/dev/null 2>&1; then
-        systemctl stop nginx 2>/dev/null || true
-        systemctl disable nginx 2>/dev/null || true
+    # Stop and disable system nginx if it was started by apt-get install, or if explicitly requested.
+    # SelfSteal uses x-ui-decoy.service with its own config; system nginx only blocks port 80 for Certbot.
+    if command -v systemctl >/dev/null 2>&1; then
+        if [ "$nginx_was_active_before" -eq 0 ] && systemctl is-active --quiet nginx 2>/dev/null; then
+            systemctl stop nginx 2>/dev/null || true
+            systemctl disable nginx 2>/dev/null || true
+            echo -e "${green}  ✓ Системный nginx отключён (порт 80 освобождён для Certbot standalone)${plain}"
+        elif fork_allow XUI_MANAGE_SYSTEM_NGINX "Остановка/отключение системного nginx"; then
+            systemctl stop nginx 2>/dev/null || true
+            systemctl disable nginx 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -421,9 +433,11 @@ if [ -f "${CERTBOT_HELPER}" ]; then
     fi
 
     XUI_SELFSTEAL_DOMAIN=$(grep "^XUI_SELFSTEAL_DOMAIN=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    XUI_SELFSTEAL_EXTRA_DOMAINS=$(grep "^XUI_SELFSTEAL_EXTRA_DOMAINS=" "${XUI_ENV_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
     if [ -n "$XUI_SELFSTEAL_DOMAIN" ] && [ "$XUI_SELFSTEAL_DOMAIN" != "$XUI_DOMAIN" ]; then
         echo -e "${yellow}  Выпуск сертификата для сайта-заглушки (${XUI_SELFSTEAL_DOMAIN})...${plain}"
-        certbot_issue_domain_cert "$XUI_SELFSTEAL_DOMAIN" "$XUI_ADMIN_EMAIL" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_SELFSTEAL_DOMAIN}${plain}"
+        extra_sans=$(echo "$XUI_SELFSTEAL_EXTRA_DOMAINS" | tr ',' ' ')
+        certbot_issue_domain_cert "$XUI_SELFSTEAL_DOMAIN" "$XUI_ADMIN_EMAIL" "$XUI_SELFSTEAL_DOMAIN $extra_sans" || echo -e "${yellow}  ⚠ Не удалось получить сертификат для ${XUI_SELFSTEAL_DOMAIN}${plain}"
     fi
     fi
 else

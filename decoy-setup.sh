@@ -204,7 +204,9 @@ validate_reality_config() {
     local extra
     for extra in $REALITY_DOMAINS; do
         if ! openssl verify -purpose sslserver -verify_hostname "$extra" \
-            -untrusted "$REALITY_CERT" "$REALITY_CERT" >/dev/null 2>&1; then
+            -untrusted "$REALITY_CERT" "$REALITY_CERT" >/dev/null 2>&1 && \
+           ! (openssl x509 -in "$REALITY_CERT" -noout -checkhost "$extra" >/dev/null 2>&1 && \
+              openssl x509 -in "$REALITY_CERT" -noout -checkend 0 >/dev/null 2>&1); then
             echo "[SELFSTEAL-ERROR] Основной сертификат сайта не покрывает дополнительный домен ${extra}; нужен сертификат с обоими SAN" >&2
             echo "[NEXT] x-ui-fork selfsteal certificate либо XUI_AUTO_CERTS=true для автоматического согласования" >&2
             return 1

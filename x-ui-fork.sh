@@ -178,6 +178,7 @@ Commands:
   hosts-inherit Live fingerprint/ALPN inheritance (plan, once, install, status); no Xray restart
   sni-router Dedicated common TCP443 router (plan, apply, status, stop); no DB rewrite
   controller Managed Host/certificate/router cycle (plan, once, install, status, log, stop)
+  migrate-domain Migrate domain names across DB, inbounds, hosts, and .env (<old> <new>)
   url       Print current panel URL from DB
   env       Print active .env path
   policy    Show effective opt-in permissions without applying configuration
@@ -467,6 +468,39 @@ case "${1:-help}" in
             exec bash "${PROJECT_DIR}/hosts-tls-inherit.sh" "$@"
         fi
         exec bash /usr/local/x-ui/hosts-tls-inherit.sh "$@"
+        ;;
+    migrate-domain)
+        need_root
+        old_dom="${2:-}"
+        new_dom="${3:-}"
+        if [ -z "$old_dom" ] || [ -z "$new_dom" ]; then
+            echo -e "${yellow}Использование: x-ui-fork migrate-domain <старый_домен> <новый_домен>${plain}"
+            echo -e "Пример: x-ui-fork migrate-domain r1.netstability.ru r2.netstability.ru"
+            exit 1
+        fi
+        echo -e "${yellow}Миграция домена в БД и .env: ${old_dom} -> ${new_dom}...${plain}"
+        if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+            sqlite3 "$DB_PATH" "
+UPDATE settings SET value = replace(value, '${old_dom}', '${new_dom}') WHERE value LIKE '%${old_dom}%';
+UPDATE inbounds SET stream_settings = replace(stream_settings, '${old_dom}', '${new_dom}') WHERE stream_settings LIKE '%${old_dom}%';
+UPDATE inbounds SET settings = replace(settings, '${old_dom}', '${new_dom}') WHERE settings LIKE '%${old_dom}%';
+UPDATE hosts SET address = replace(address, '${old_dom}', '${new_dom}') WHERE address LIKE '%${old_dom}%';
+UPDATE hosts SET sni = replace(sni, '${old_dom}', '${new_dom}') WHERE sni LIKE '%${old_dom}%';
+UPDATE hosts SET host_header = replace(host_header, '${old_dom}', '${new_dom}') WHERE host_header LIKE '%${old_dom}%';
+UPDATE hosts SET path = replace(path, '${old_dom}', '${new_dom}') WHERE path LIKE '%${old_dom}%';
+UPDATE hosts SET server_description = replace(server_description, '${old_dom}', '${new_dom}') WHERE server_description LIKE '%${old_dom}%';
+"
+            echo -e "${green}✓ База данных обновлена (${old_dom} -> ${new_dom})${plain}"
+        fi
+        for env_f in "${PROJECT_DIR}/.env" "/etc/x-ui/.env"; do
+            if [ -f "$env_f" ] && grep -qF "$old_dom" "$env_f" 2>/dev/null; then
+                sed -i "s/${old_dom}/${new_dom}/g" "$env_f" 2>/dev/null || true
+                echo -e "${green}✓ Файл ${env_f} обновлён (${old_dom} -> ${new_dom})${plain}"
+            fi
+        done
+        echo -e "${yellow}Перезапуск x-ui для применения изменений...${plain}"
+        systemctl restart x-ui
+        echo -e "${green}✓ Готово! Панель перезапущена с новыми доменами.${plain}"
         ;;
     policy)
         (

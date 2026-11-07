@@ -548,12 +548,119 @@ try_use_domain() {
     return 0
 }
 
+migrate_db_domains() {
+    old_dom="$1"
+    new_dom="$2"
+
+    [ -n "$old_dom" ] && [ -n "$new_dom" ] && [ "$old_dom" != "$new_dom" ] || return 0
+
+    esc_old=$(sqlite_escape "$old_dom")
+    esc_new=$(sqlite_escape "$new_dom")
+
+    echo "[DOMAIN-MIGRATE] Updating database references: ${old_dom} -> ${new_dom}"
+
+    sqlite_db "
+UPDATE settings
+SET value = replace(value, '${esc_old}', '${esc_new}')
+WHERE value LIKE '%${esc_old}%';
+
+UPDATE inbounds
+SET stream_settings = replace(stream_settings, '${esc_old}', '${esc_new}')
+WHERE stream_settings LIKE '%${esc_old}%';
+
+UPDATE inbounds
+SET settings = replace(settings, '${esc_old}', '${esc_new}')
+WHERE settings LIKE '%${esc_old}%';
+
+UPDATE hosts
+SET address = replace(address, '${esc_old}', '${esc_new}')
+WHERE address LIKE '%${esc_old}%';
+
+UPDATE hosts
+SET sni = replace(sni, '${esc_old}', '${esc_new}')
+WHERE sni LIKE '%${esc_old}%';
+
+UPDATE hosts
+SET host_header = replace(host_header, '${esc_old}', '${esc_new}')
+WHERE host_header LIKE '%${esc_old}%';
+
+UPDATE hosts
+SET path = replace(path, '${esc_old}', '${esc_new}')
+WHERE path LIKE '%${esc_old}%';
+
+UPDATE hosts
+SET server_description = replace(server_description, '${esc_old}', '${esc_new}')
+WHERE server_description LIKE '%${esc_old}%';
+" 2>/dev/null || true
+}
+
+auto_migrate_domains() {
+    old_target="$1"
+    new_target="$2"
+
+    [ -n "$old_target" ] && [ -n "$new_target" ] && [ "$old_target" != "$new_target" ] || return 0
+
+    old_base="$old_target"
+    new_base="$new_target"
+
+    old_pfx="${old_target%%.*}"
+    new_pfx="${new_target%%.*}"
+    if [ "$old_pfx" = "$new_pfx" ] && [ "$old_target" != "$old_pfx" ] && [ "$new_target" != "$new_pfx" ]; then
+        old_base="${old_target#*.}"
+        new_base="${new_target#*.}"
+    elif [ "$old_target" != "${old_target#*.}" ] && [ "$new_target" != "${new_target#*.}" ]; then
+        old_sfx="${old_target#*.}"
+        new_sfx="${new_target#*.}"
+        if [ "${old_sfx#*.}" = "${new_sfx#*.}" ] && [ -n "${old_sfx#*.}" ]; then
+            old_base="$old_sfx"
+            new_base="$new_sfx"
+        fi
+    fi
+
+    echo "[DOMAIN-MIGRATE] Detected domain migration: ${old_base} -> ${new_base}"
+
+    migrate_db_domains "$old_base" "$new_base"
+    if [ "$old_target" != "$old_base" ] || [ "$new_target" != "$new_base" ]; then
+        migrate_db_domains "$old_target" "$new_target"
+    fi
+
+    if [ -n "$old_base" ] && [ -n "$new_base" ]; then
+        case "${XUI_SELFSTEAL_DOMAIN:-}" in
+            *"$old_base"*) XUI_SELFSTEAL_DOMAIN="${XUI_SELFSTEAL_DOMAIN//$old_base/$new_base}" ;;
+        esac
+        case "${XUI_SELFSTEAL_EXTRA_DOMAINS:-}" in
+            *"$old_base"*) XUI_SELFSTEAL_EXTRA_DOMAINS="${XUI_SELFSTEAL_EXTRA_DOMAINS//$old_base/$new_base}" ;;
+        esac
+        case "${XUI_SELFSTEAL_CERT_FILE:-}" in
+            *"$old_base"*) XUI_SELFSTEAL_CERT_FILE="${XUI_SELFSTEAL_CERT_FILE//$old_base/$new_base}" ;;
+        esac
+        case "${XUI_SELFSTEAL_KEY_FILE:-}" in
+            *"$old_base"*) XUI_SELFSTEAL_KEY_FILE="${XUI_SELFSTEAL_KEY_FILE//$old_base/$new_base}" ;;
+        esac
+        case "${XUI_SUB_DOMAIN:-}" in
+            *"$old_base"*) XUI_SUB_DOMAIN="${XUI_SUB_DOMAIN//$old_base/$new_base}" ;;
+        esac
+
+        for env_file in "${SCRIPT_DIR}/.env" "/etc/x-ui/.env"; do
+            if [ -f "$env_file" ] && grep -qF "$old_base" "$env_file" 2>/dev/null; then
+                sed -i "s/${old_base}/${new_base}/g" "$env_file" 2>/dev/null || true
+                echo "[DOMAIN-MIGRATE] Updated references in ${env_file}: ${old_base} -> ${new_base}"
+            fi
+            if [ "$old_target" != "$old_base" ] && [ -f "$env_file" ] && grep -qF "$old_target" "$env_file" 2>/dev/null; then
+                sed -i "s/${old_target}/${new_target}/g" "$env_file" 2>/dev/null || true
+            fi
+        done
+    fi
+}
+
 sync_inbound_tls_certs() {
     target_domain=$1
     target_cert_file=$2
     target_key_file=$3
 
     fork_allow XUI_SYNC_INBOUND_CERTS "Замена сертификатов TLS-входящих" || return 0
+
+    live_base="${LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}"
 
     # 1. Resolve target certificate from DB or disk if not provided or missing
     if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
@@ -568,10 +675,10 @@ sync_inbound_tls_certs() {
     fi
 
     if [ -z "$target_cert_file" ] || [ ! -f "$target_cert_file" ] || [ ! -f "$target_key_file" ]; then
-        discovered_cert=$(find /etc/letsencrypt/live/ -name "fullchain.pem" 2>/dev/null | head -n 1)
+        discovered_cert=$(find "${live_base}/" -name "fullchain.pem" 2>/dev/null | head -n 1)
         if [ -n "$discovered_cert" ]; then
             discovered_domain=$(echo "$discovered_cert" | awk -F'/' '{print $(NF-1)}')
-            discovered_key="/etc/letsencrypt/live/${discovered_domain}/privkey.pem"
+            discovered_key="${live_base}/${discovered_domain}/privkey.pem"
             if [ -f "$discovered_key" ]; then
                 target_cert_file="$discovered_cert"
                 target_key_file="$discovered_key"
@@ -615,12 +722,30 @@ WHERE enable = 1
             continue
         fi
 
-        # 2. If inbound has its own serverName and its certificate exists under /etc/letsencrypt/live/${current_server}/
-        if [ -n "$current_server" ] && [ -f "/etc/letsencrypt/live/${current_server}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${current_server}/privkey.pem" ]; then
-            own_cert="/etc/letsencrypt/live/${current_server}/fullchain.pem"
-            own_key="/etc/letsencrypt/live/${current_server}/privkey.pem"
-            esc_own_cert=$(sqlite_escape "$own_cert")
-            esc_own_key=$(sqlite_escape "$own_key")
+        # 2. If inbound has its own serverName and its certificate exists or covers it via SAN
+        found_cert=""
+        found_key=""
+        if [ -n "$current_server" ]; then
+            if [ -f "${live_base}/${current_server}/fullchain.pem" ] && [ -f "${live_base}/${current_server}/privkey.pem" ]; then
+                found_cert="${live_base}/${current_server}/fullchain.pem"
+                found_key="${live_base}/${current_server}/privkey.pem"
+            elif command -v openssl >/dev/null 2>&1; then
+                for c_cand in "${live_base}"/*/fullchain.pem; do
+                    [ -f "$c_cand" ] || continue
+                    k_cand="$(dirname "$c_cand")/privkey.pem"
+                    [ -f "$k_cand" ] || continue
+                    if openssl x509 -in "$c_cand" -noout -checkhost "$current_server" >/dev/null 2>&1; then
+                        found_cert="$c_cand"
+                        found_key="$k_cand"
+                        break
+                    fi
+                done
+            fi
+        fi
+
+        if [ -n "$found_cert" ]; then
+            esc_own_cert=$(sqlite_escape "$found_cert")
+            esc_own_key=$(sqlite_escape "$found_key")
             sqlite_db "
 UPDATE inbounds
 SET stream_settings = json_set(
@@ -630,7 +755,7 @@ SET stream_settings = json_set(
 )
 WHERE id = ${inbound_id};
 "
-            echo "[INBOUND-CERT] Linked inbound id=${inbound_id} to its domain certificate: ${current_server}"
+            echo "[INBOUND-CERT] Linked inbound id=${inbound_id} to certificate: ${found_cert} (serverName: ${current_server})"
             continue
         fi
 
@@ -1661,6 +1786,12 @@ if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/
         echo "[DOMAIN] Final domain saved to DB: $FINAL_DOMAIN"
         echo "[DOMAIN] Certificate paths saved to DB"
 
+        if [ -n "$DB_DOMAIN" ] && [ "$FINAL_DOMAIN" != "$DB_DOMAIN" ]; then
+            auto_migrate_domains "$DB_DOMAIN" "$FINAL_DOMAIN"
+        elif [ -n "${XUI_OLD_DOMAIN:-}" ]; then
+            auto_migrate_domains "$XUI_OLD_DOMAIN" "$FINAL_DOMAIN"
+        fi
+
         # Ensure certificate for XUI_HAPROXY_DOMAIN if set and different
         if fork_policy_enabled XUI_AUTO_CERTS && [ -n "$XUI_HAPROXY_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "$FINAL_DOMAIN" ] && [ "$XUI_HAPROXY_DOMAIN" != "${SUB_DOMAIN:-}" ]; then
             if command -v is_domain_name >/dev/null 2>&1 && is_domain_name "$XUI_HAPROXY_DOMAIN"; then
@@ -1710,6 +1841,11 @@ WHERE inbounds.enable = 1
     json_extract(inbounds.stream_settings, '$.realitySettings.target') LIKE '127.0.0.1:%'
     OR json_extract(inbounds.stream_settings, '$.realitySettings.target') LIKE 'localhost:%'
     OR json_extract(inbounds.stream_settings, '$.realitySettings.target') = '127.0.0.1'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.target') LIKE '/run/%'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.dest') LIKE '127.0.0.1:%'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.dest') LIKE 'localhost:%'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.dest') = '127.0.0.1'
+    OR json_extract(inbounds.stream_settings, '$.realitySettings.dest') LIKE '/run/%'
   )
 UNION
 SELECT sni FROM hosts 
@@ -1725,6 +1861,11 @@ WHERE security = 'reality'
           json_extract(stream_settings, '$.realitySettings.target') LIKE '127.0.0.1:%'
           OR json_extract(stream_settings, '$.realitySettings.target') LIKE 'localhost:%'
           OR json_extract(stream_settings, '$.realitySettings.target') = '127.0.0.1'
+          OR json_extract(stream_settings, '$.realitySettings.target') LIKE '/run/%'
+          OR json_extract(stream_settings, '$.realitySettings.dest') LIKE '127.0.0.1:%'
+          OR json_extract(stream_settings, '$.realitySettings.dest') LIKE 'localhost:%'
+          OR json_extract(stream_settings, '$.realitySettings.dest') = '127.0.0.1'
+          OR json_extract(stream_settings, '$.realitySettings.dest') LIKE '/run/%'
         )
     )
   );
@@ -1774,7 +1915,21 @@ SELECT sni FROM hosts WHERE security = 'tls' AND sni != '' AND sni NOT LIKE '127
                 # Check if DNS resolves to self before calling certbot
                 if command -v domain_points_to_this_server >/dev/null 2>&1 && domain_points_to_this_server "$d"; then
                     echo "[AUTO-SSL] Automatically requesting SSL certificate for domain: $d"
-                    if certbot_issue_domain_cert "$d" "$CERTBOT_EMAIL"; then
+                    extra_sans=""
+                    if [ "$d" = "${XUI_SELFSTEAL_DOMAIN:-}" ] || echo "$db_reality_doms" | grep -qx "$d"; then
+                        extra_sans=$(echo "$env_extra_doms $db_reality_doms" | tr ' ' '\n' | grep -v "^${d}$" | sort -u | tr '\n' ' ')
+                    fi
+                    cert_issue_ok=0
+                    if [ -n "$extra_sans" ]; then
+                        if certbot_issue_domain_cert "$d" "$CERTBOT_EMAIL" "$d $extra_sans"; then
+                            cert_issue_ok=1
+                        fi
+                    else
+                        if certbot_issue_domain_cert "$d" "$CERTBOT_EMAIL"; then
+                            cert_issue_ok=1
+                        fi
+                    fi
+                    if [ "$cert_issue_ok" -eq 1 ]; then
                         decoy_updated=1
                         if [ "$d" = "$XUI_DOMAIN" ] || [ "$d" = "$(get_setting_value webDomain)" ]; then
                             set_always "webCertFile" "/etc/letsencrypt/live/${d}/fullchain.pem"
@@ -1803,6 +1958,13 @@ else
     if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != "$DB_DOMAIN" ]; then
         echo "[DOMAIN] Using env domain without certbot: $ENV_DOMAIN"
         XUI_DOMAIN="$ENV_DOMAIN"
+        if [ -n "$DB_DOMAIN" ]; then
+            auto_migrate_domains "$DB_DOMAIN" "$ENV_DOMAIN"
+        elif [ -n "${XUI_OLD_DOMAIN:-}" ]; then
+            auto_migrate_domains "$XUI_OLD_DOMAIN" "$ENV_DOMAIN"
+        fi
+    elif [ -n "${XUI_OLD_DOMAIN:-}" ]; then
+        auto_migrate_domains "$XUI_OLD_DOMAIN" "${ENV_DOMAIN:-$DB_DOMAIN}"
     elif [ -n "$DB_DOMAIN" ]; then
         XUI_DOMAIN="$DB_DOMAIN"
     elif [ -n "$ENV_DOMAIN" ]; then
