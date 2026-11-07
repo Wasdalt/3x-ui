@@ -73,6 +73,11 @@ if [ -f "${SCRIPT_DIR}/x-ui-fork.sh" ]; then
     echo -e "${green}  ✓ x-ui-fork обновлён${plain}"
 fi
 
+if [ -f "${XUI_DIR}/x-ui.sh" ]; then
+    chmod +x "${XUI_DIR}/x-ui.sh"
+    ln -sf "${XUI_DIR}/x-ui.sh" /usr/bin/x-ui
+fi
+
 if [ -d "${SCRIPT_DIR}/decoy" ]; then
     mkdir -p "${XUI_DIR}/decoy"
     cp -rf "${SCRIPT_DIR}/decoy/"* "${XUI_DIR}/decoy/"

@@ -1707,6 +1707,19 @@ fi
 if command -v certbot >/dev/null 2>&1 || command -v certbot_issue_domain_cert >/dev/null 2>&1; then
     CERTBOT_EMAIL="${XUI_ADMIN_EMAIL:-}"
 
+    # Auto-migrate domain if DB contains a different node base than ENV_DOMAIN
+    db_base="${DB_DOMAIN#*.}"
+    env_base="${ENV_DOMAIN#*.}"
+    if [ -n "$db_base" ] && [ -n "$env_base" ] && [ "$db_base" != "$env_base" ] && [ "$DB_DOMAIN" != "$db_base" ] && [ "$ENV_DOMAIN" != "$env_base" ]; then
+        echo "[DOMAIN] Database node base ($db_base) differs from env node base ($env_base)"
+        auto_migrate_domains "$db_base" "$env_base"
+        DB_DOMAIN=$(get_setting_value "webDomain")
+    elif [ -n "${XUI_OLD_DOMAIN:-}" ]; then
+        echo "[DOMAIN] Explicit XUI_OLD_DOMAIN configured: $XUI_OLD_DOMAIN"
+        auto_migrate_domains "$XUI_OLD_DOMAIN" "${ENV_DOMAIN:-$DB_DOMAIN}"
+        DB_DOMAIN=$(get_setting_value "webDomain")
+    fi
+
     if [ -n "$ENV_DOMAIN" ] && [ "$ENV_DOMAIN" != "$DB_DOMAIN" ]; then
         echo "[DOMAIN] Env domain differs from database domain"
         echo "[DOMAIN] Database domain: ${DB_DOMAIN:-none}"
