@@ -626,19 +626,19 @@ auto_migrate_domains() {
 
     if [ -n "$old_base" ] && [ -n "$new_base" ]; then
         case "${XUI_SELFSTEAL_DOMAIN:-}" in
-            *"$old_base"*) XUI_SELFSTEAL_DOMAIN="${XUI_SELFSTEAL_DOMAIN//$old_base/$new_base}" ;;
+            *"$old_base"*) XUI_SELFSTEAL_DOMAIN=$(printf '%s' "${XUI_SELFSTEAL_DOMAIN}" | sed "s|${old_base}|${new_base}|g") ;;
         esac
         case "${XUI_SELFSTEAL_EXTRA_DOMAINS:-}" in
-            *"$old_base"*) XUI_SELFSTEAL_EXTRA_DOMAINS="${XUI_SELFSTEAL_EXTRA_DOMAINS//$old_base/$new_base}" ;;
+            *"$old_base"*) XUI_SELFSTEAL_EXTRA_DOMAINS=$(printf '%s' "${XUI_SELFSTEAL_EXTRA_DOMAINS}" | sed "s|${old_base}|${new_base}|g") ;;
         esac
         case "${XUI_SELFSTEAL_CERT_FILE:-}" in
-            *"$old_base"*) XUI_SELFSTEAL_CERT_FILE="${XUI_SELFSTEAL_CERT_FILE//$old_base/$new_base}" ;;
+            *"$old_base"*) XUI_SELFSTEAL_CERT_FILE=$(printf '%s' "${XUI_SELFSTEAL_CERT_FILE}" | sed "s|${old_base}|${new_base}|g") ;;
         esac
         case "${XUI_SELFSTEAL_KEY_FILE:-}" in
-            *"$old_base"*) XUI_SELFSTEAL_KEY_FILE="${XUI_SELFSTEAL_KEY_FILE//$old_base/$new_base}" ;;
+            *"$old_base"*) XUI_SELFSTEAL_KEY_FILE=$(printf '%s' "${XUI_SELFSTEAL_KEY_FILE}" | sed "s|${old_base}|${new_base}|g") ;;
         esac
         case "${XUI_SUB_DOMAIN:-}" in
-            *"$old_base"*) XUI_SUB_DOMAIN="${XUI_SUB_DOMAIN//$old_base/$new_base}" ;;
+            *"$old_base"*) XUI_SUB_DOMAIN=$(printf '%s' "${XUI_SUB_DOMAIN}" | sed "s|${old_base}|${new_base}|g") ;;
         esac
 
         for env_file in "${SCRIPT_DIR}/.env" "/etc/x-ui/.env"; do
