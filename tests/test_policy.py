@@ -52,14 +52,23 @@ class PolicyTests(unittest.TestCase):
         assignments = [line.split("=", 1) for line in (ROOT / ".env.example").read_text().splitlines()
                        if line.startswith("XUI_") and "=" in line]
         values = dict(assignments)
-        expected = {"XUI_SELFSTEAL_PROXY_INBOUNDS": "auto", "XUI_SELFSTEAL_DOMAIN": "",
-                    "XUI_SELFSTEAL_EXTRA_DOMAINS": "", "XUI_SELFSTEAL_MODE": "legacy"}
-        for flag in ("XUI_SELFSTEAL_ENABLE", "XUI_SELFSTEAL_PUBLIC", "XUI_PANEL_CONTROLLER_ENABLE",
+        expected = {
+            "XUI_SELFSTEAL_PROXY_INBOUNDS": "auto",
+            "XUI_SELFSTEAL_DOMAIN": "",
+            "XUI_SELFSTEAL_EXTRA_DOMAINS": "",
+            "XUI_SELFSTEAL_MODE": "reality",
+            "XUI_SELFSTEAL_ENABLE": "true",
+            "XUI_AUTO_DB_APPLY": "true",
+            "XUI_AUTO_CERTS": "true",
+            "XUI_AUTO_CERT_DOMAINS": "true",
+            "XUI_SYNC_INBOUND_CERTS": "true",
+            "XUI_MANAGE_SYSTEM_NGINX": "true",
+            "XUI_CERTBOT_STOP_WEB_SERVER": "true",
+        }
+        for flag in ("XUI_SELFSTEAL_PUBLIC", "XUI_PANEL_CONTROLLER_ENABLE",
                      "XUI_HAPROXY_ENABLE", "XUI_SNI_ROUTER_ENABLE", "XUI_HOSTS_SYNC",
-                     "XUI_HOSTS_INHERIT_TLS", "XUI_AUTO_DB_APPLY", "XUI_AUTO_CERTS",
-                     "XUI_AUTO_CERT_DOMAINS", "XUI_REWRITE_INBOUNDS", "XUI_SYNC_INBOUND_CERTS",
+                     "XUI_HOSTS_INHERIT_TLS", "XUI_REWRITE_INBOUNDS",
                      "XUI_TUNE_NETWORK", "XUI_CLEANUP_ORPHANS", "XUI_DB_MAINTENANCE",
-                     "XUI_MANAGE_SYSTEM_NGINX", "XUI_CERTBOT_STOP_WEB_SERVER",
                      "XUI_REPAIR_XRAY_TEMPLATE", "XUI_SELFSTEAL_ALLOW_FALLBACK_CERT"):
             expected[flag] = "false"
         for key, value in expected.items():

@@ -33,7 +33,7 @@ x-ui-fork policy
 
 ## Матрица разрешений
 
-Все перечисленные флаги по умолчанию `false`:
+При отсутствии `.env` все перечисленные флаги в runtime (`fork-policy.sh`) по умолчанию `false`. В шаблоне `.env.example` заранее включены `XUI_AUTO_DB_APPLY`, `XUI_AUTO_CERTS`, `XUI_AUTO_CERT_DOMAINS`, `XUI_SYNC_INBOUND_CERTS`, `XUI_MANAGE_SYSTEM_NGINX`, `XUI_CERTBOT_STOP_WEB_SERVER` и `XUI_SELFSTEAL_ENABLE` (`reality`), а остальные опасные/конфликтующие флаги остаются `false`:
 
 | Флаг | Что разрешает | Без разрешения |
 |---|---|---|
