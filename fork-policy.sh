@@ -69,3 +69,21 @@ fork_summary() {
         "${FORK_SETTING_CHANGES:-0}" "${FORK_SETTING_KEPT:-0}" "${FORK_SETTING_SKIPPED:-0}" "${FORK_WARNINGS:-0}"
     printf '[SUMMARY] Это не проверка подключения клиента; сверяйте [WARN]/[ERROR] и статусы служб\n'
 }
+
+fork_normalize_panel_version() {
+    fork_ver=$(printf '%s' "${1:-}" | tr -d ' \t\r\n')
+    case "$fork_ver" in
+        ""|latest|dev|v[0-9]*)
+            printf '%s' "$fork_ver"
+            ;;
+        V[0-9]*)
+            printf 'v%s' "${fork_ver#V}"
+            ;;
+        [0-9]*.[0-9]*)
+            printf 'v%s' "$fork_ver"
+            ;;
+        *)
+            printf '%s' "$fork_ver"
+            ;;
+    esac
+}

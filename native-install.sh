@@ -159,8 +159,8 @@ elif [ -f "$DOCKER_DB_PATH" ]; then
     echo -e "${green}  ✓ Бэкап БД (из Docker): ${DB_BACKUP}${plain}"
 fi
 
-CLI_VERSION="${1:-}"
-CONFIG_VERSION="${XUI_PANEL_VERSION:-}"
+CLI_VERSION=$(fork_normalize_panel_version "${1:-}")
+CONFIG_VERSION=$(fork_normalize_panel_version "${XUI_PANEL_VERSION:-}")
 TARGET_VERSION="${CLI_VERSION:-$CONFIG_VERSION}"
 DO_INSTALL_UPSTREAM=0
 
@@ -200,6 +200,7 @@ else
     TARGET_VERSION="${TARGET_VERSION:-latest}"
 fi
 
+TARGET_VERSION=$(fork_normalize_panel_version "$TARGET_VERSION")
 if [ "$DO_INSTALL_UPSTREAM" -eq 1 ]; then
     if [ -n "$TARGET_VERSION" ] && [ "$TARGET_VERSION" != "latest" ]; then
         echo -e "  Запуск оригинального установщика (версия ${TARGET_VERSION})..."

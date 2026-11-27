@@ -114,6 +114,22 @@ class PolicyTests(unittest.TestCase):
         for file in ("native-install.sh", "native-apply.sh"):
             self.assertNotIn("rm -f /etc/nginx/sites-enabled/default", (ROOT / file).read_text())
 
+    def test_panel_version_normalization_prepends_v_for_numeric_tags(self):
+        cases = [
+            ("", ""),
+            ("latest", "latest"),
+            ("dev", "dev"),
+            ("3.7.0", "v3.7.0"),
+            (" 3.7.0 ", "v3.7.0"),
+            ("v3.7.0", "v3.7.0"),
+            ("V3.7.0", "v3.7.0"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                result = self.shell(f'fork_normalize_panel_version "{raw}"')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+
 
 @unittest.skipUnless(shutil.which("sqlite3") and shutil.which("jq"), "requires sqlite3 and jq")
 class InboundSafetyTests(unittest.TestCase):

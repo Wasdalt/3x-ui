@@ -46,10 +46,13 @@ if [ -f "$DB_PATH" ]; then
     echo -e "${green}  ✓ Бэкап БД: ${BACKUP_PATH}${plain}"
 fi
 
+. "${SCRIPT_DIR}/fork-policy.sh"
+
 UPDATE_VERSION="${1:-}"
 if [ -z "$UPDATE_VERSION" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
     UPDATE_VERSION=$(grep -E "^XUI_PANEL_VERSION=" "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d ' "\r\n' || echo "")
 fi
+UPDATE_VERSION=$(fork_normalize_panel_version "$UPDATE_VERSION")
 
 echo -e "${yellow}[1/2] Обновление официальной 3x-ui...${plain}"
 if [ -n "$UPDATE_VERSION" ] && [ "$UPDATE_VERSION" != "latest" ]; then
