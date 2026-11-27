@@ -199,6 +199,51 @@ setup_reality_service
     def test_bad_mode_is_rejected(self):
         self.assertNotEqual(self.shell("true", XUI_SELFSTEAL_MODE="typo").returncode, 0)
 
+    def test_empty_extra_domains_in_env_discovers_all_db_names(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory(prefix="db-discover-", dir=self.base) as tmp:
+            db = Path(tmp) / "panel.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE inbounds (id INTEGER PRIMARY KEY, enable INTEGER, stream_settings TEXT)")
+                stream = '{"security":"reality","realitySettings":{"target":"/run/x-ui-selfsteal/https.sock","serverNames":["studio.example.com","media.example.com"]}}'
+                conn.execute("INSERT INTO inbounds VALUES (13, 1, ?)", (stream,))
+            result = self.shell('resolve_reality_names && printf "%s" "$REALITY_DOMAINS"',
+                                XUI_DB_PATH=str(db), XUI_SELFSTEAL_DOMAIN="", XUI_SELFSTEAL_EXTRA_DOMAINS="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "studio.example.com media.example.com")
+
+    def test_reality_http_redirect_opt_in_and_default_closed(self):
+        with tempfile.TemporaryDirectory(prefix="reality-http-", dir=self.base) as tmp:
+            conf_default = Path(tmp) / "default.conf"
+            conf_redirect = Path(tmp) / "redirect.conf"
+            body = f'''
+REALITY_DOMAIN="studio.example.com"
+REALITY_DOMAINS="studio.example.com media.example.com"
+REALITY_CERT="{self.cert}"
+REALITY_KEY="{self.key}"
+nginx() {{ printf "nginx version: nginx/1.24.0\\n"; }}
+generate_reality_nginx_conf "{conf_default}"
+'''
+            res_def = self.shell(body)
+            self.assertEqual(res_def.returncode, 0, res_def.stderr)
+            self.assertNotIn("listen 80;", conf_default.read_text())
+
+            body_red = f'''
+REALITY_DOMAIN="studio.example.com"
+REALITY_DOMAINS="studio.example.com media.example.com"
+REALITY_CERT="{self.cert}"
+REALITY_KEY="{self.key}"
+nginx() {{ printf "nginx version: nginx/1.24.0\\n"; }}
+generate_reality_nginx_conf "{conf_redirect}"
+'''
+            res_red = self.shell(body_red, XUI_SELFSTEAL_HTTP_REDIRECT="true")
+            self.assertEqual(res_red.returncode, 0, res_red.stderr)
+            text = conf_redirect.read_text()
+            self.assertIn("listen 80;", text)
+            self.assertIn("server_name studio.example.com media.example.com;", text)
+            self.assertIn("location /.well-known/acme-challenge/", text)
+            self.assertIn("return 301 https://$host$request_uri;", text)
+
     def test_legacy_remains_default(self):
         result = self.shell('printf "%s" "$SELFSTEAL_MODE"', XUI_SELFSTEAL_MODE="")
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -18,7 +18,7 @@ if [ "${XUI_PANEL_CONTROLLER_ENABLE:-}" = true ] && [ "${XUI_PANEL_CONTROLLER_CO
     for _scope_name in XUI_DB_PATH XUI_SELFSTEAL_DOMAIN XUI_SELFSTEAL_EXTRA_DOMAINS \
         XUI_SNI_ROUTER_INBOUNDS XUI_SELFSTEAL_PORT XUI_AUTO_DB_APPLY \
         XUI_SNI_ROUTER_ENABLE XUI_SELFSTEAL_ENABLE XUI_SELFSTEAL_MODE \
-        XUI_SELFSTEAL_PUBLIC XUI_HAPROXY_ENABLE XUI_AUTO_CERTS \
+        XUI_SELFSTEAL_PUBLIC XUI_SELFSTEAL_HTTP_REDIRECT XUI_HAPROXY_ENABLE XUI_AUTO_CERTS \
         XUI_REWRITE_INBOUNDS XUI_HOSTS_SYNC XUI_PANEL_CONTROLLER_ENABLE XUI_PANEL_CONTROLLER_CONTEXT; do
         if [[ -v $_scope_name ]]; then _controller_scope+=("${_scope_name}=${!_scope_name}"); fi
     done
@@ -61,7 +61,13 @@ resolve_reality_names() {
     REALITY_DOMAIN="${XUI_SELFSTEAL_DOMAIN:-}"
     local discovered_domains="" extra_domain_list="${XUI_SELFSTEAL_EXTRA_DOMAINS:-}"
     local domain_db="${XUI_DB_PATH:-${CONFIG_DIR}/x-ui.db}"
-    if [ -z "$REALITY_DOMAIN" ] || [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ]; then
+    local auto_discover_extra=0
+    if [ "${XUI_PANEL_CONTROLLER_ENABLE:-}" = true ] && [ "${XUI_PANEL_CONTROLLER_CONTEXT:-}" = 1 ]; then
+        [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ] && auto_discover_extra=1
+    else
+        [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS:-}" ] && auto_discover_extra=1
+    fi
+    if [ -z "$REALITY_DOMAIN" ] || [ "$auto_discover_extra" -eq 1 ]; then
         if [ -f "$domain_db" ] && command -v python3 >/dev/null 2>&1 && [ -f "${DECOY_ROOT}/selfsteal_domains.py" ]; then
             discovered_domains=$(python3 "${DECOY_ROOT}/selfsteal_domains.py" --db "$domain_db" \
                 --primary "$REALITY_DOMAIN" --backend-port "$SELFSTEAL_PORT") || return 1
@@ -74,7 +80,7 @@ resolve_reality_names() {
         REALITY_DOMAIN=$(printf '%s\n' "$discovered_domains" | head -n 1)
         echo "[DISCOVER] Основной HTTPS-домен взят из локального SelfSteal-входящего: ${REALITY_DOMAIN}" >&2
     fi
-    if [ -z "${XUI_SELFSTEAL_EXTRA_DOMAINS+x}" ] && [ -n "$discovered_domains" ]; then
+    if [ "$auto_discover_extra" -eq 1 ] && [ -n "$discovered_domains" ]; then
         extra_domain_list=$(printf '%s\n' "$discovered_domains" | grep -Fvx "$REALITY_DOMAIN" | paste -sd, - || true)
     fi
     is_selfsteal_domain "$REALITY_DOMAIN" || {
@@ -175,8 +181,8 @@ validate_reality_config() {
     fi
     REALITY_CERT="${XUI_SELFSTEAL_CERT_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/fullchain.pem}"
     REALITY_KEY="${XUI_SELFSTEAL_KEY_FILE:-/etc/letsencrypt/live/${REALITY_DOMAIN}/privkey.pem}"
-    local path
-    for path in "$REALITY_CERT" "$REALITY_KEY" "$PUBLIC_DIR"; do
+    local path webroot="${XUI_CERTBOT_WEBROOT:-/var/www/html}"
+    for path in "$REALITY_CERT" "$REALITY_KEY" "$PUBLIC_DIR" "$webroot"; do
         if ! [[ "$path" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
             echo "[SELFSTEAL-ERROR] Требуется абсолютный путь без пробелов и специальных символов: ${path}" >&2
             return 1
@@ -273,12 +279,25 @@ EOF
 
 generate_reality_nginx_conf() {
     # Caller validates all interpolated values before writing any file.
-    local output="$1" h2_listen="http2" h2_line="" version
+    local output="$1" h2_listen="http2" h2_line="" version http_redirect_block="" webroot="${XUI_CERTBOT_WEBROOT:-/var/www/html}"
     version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
     if [ "$(printf '%s\n' "$version" | cut -d. -f1)" -gt 1 ] ||
        { [ "$(printf '%s\n' "$version" | cut -d. -f1)" -eq 1 ] && [ "$(printf '%s\n' "$version" | cut -d. -f2)" -ge 25 ]; }; then
         h2_listen=""
         h2_line="http2 on;"
+    fi
+    if fork_policy_enabled XUI_SELFSTEAL_HTTP_REDIRECT; then
+        http_redirect_block="    server {
+        listen 80;
+        server_name ${REALITY_DOMAINS:-$REALITY_DOMAIN};
+        location /.well-known/acme-challenge/ {
+            root ${webroot};
+            try_files \$uri =404;
+        }
+        location / {
+            return 301 https://\$host\$request_uri;
+        }
+    }"
     fi
     cat > "$output" <<EOF
 user root;
@@ -315,6 +334,7 @@ ${REALITY_PROXY_LOCATIONS:-}
         location / { try_files \$uri \$uri/ =404; }
         location ~ /\. { deny all; }
     }
+${http_redirect_block}
 }
 EOF
 }
@@ -341,6 +361,9 @@ setup_reality_service() {
         switch_template "$SELFSTEAL_TEMPLATE" || return 1
     fi
     prepare_site_metadata "https://${REALITY_DOMAIN}" || return 1
+    if fork_policy_enabled XUI_SELFSTEAL_HTTP_REDIRECT; then
+        mkdir -p "${XUI_CERTBOT_WEBROOT:-/var/www/html}" || return 1
+    fi
     install -d -m 0700 /run/x-ui-selfsteal || return 1
     tmp_cfg=$(mktemp) || return 1
     generate_reality_nginx_conf "$tmp_cfg" || { rm -f "$tmp_cfg"; return 1; }

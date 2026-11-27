@@ -30,7 +30,7 @@ class PolicyTests(unittest.TestCase):
         for flag in ("XUI_PANEL_CONTROLLER_ENABLE", "XUI_REWRITE_INBOUNDS", "XUI_SYNC_INBOUND_CERTS", "XUI_TUNE_NETWORK",
                      "XUI_CLEANUP_ORPHANS", "XUI_DB_MAINTENANCE", "XUI_AUTO_DB_APPLY",
                      "XUI_AUTO_CERTS", "XUI_AUTO_CERT_DOMAINS", "XUI_MANAGE_SYSTEM_NGINX",
-                     "XUI_CERTBOT_STOP_WEB_SERVER",
+                     "XUI_CERTBOT_STOP_WEB_SERVER", "XUI_SELFSTEAL_HTTP_REDIRECT",
                      "XUI_REPAIR_XRAY_TEMPLATE", "XUI_SELFSTEAL_ALLOW_FALLBACK_CERT"):
             with self.subTest(flag=flag):
                 result = self.shell(f'fork_allow {flag} "test action"')
@@ -65,7 +65,7 @@ class PolicyTests(unittest.TestCase):
             "XUI_MANAGE_SYSTEM_NGINX": "true",
             "XUI_CERTBOT_STOP_WEB_SERVER": "true",
         }
-        for flag in ("XUI_SELFSTEAL_PUBLIC", "XUI_PANEL_CONTROLLER_ENABLE",
+        for flag in ("XUI_SELFSTEAL_PUBLIC", "XUI_SELFSTEAL_HTTP_REDIRECT", "XUI_PANEL_CONTROLLER_ENABLE",
                      "XUI_HAPROXY_ENABLE", "XUI_SNI_ROUTER_ENABLE", "XUI_HOSTS_SYNC",
                      "XUI_HOSTS_INHERIT_TLS", "XUI_REWRITE_INBOUNDS",
                      "XUI_TUNE_NETWORK", "XUI_CLEANUP_ORPHANS", "XUI_DB_MAINTENANCE",
