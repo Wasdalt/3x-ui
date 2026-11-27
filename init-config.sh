@@ -213,6 +213,16 @@ get_setting_value() {
     sqlite_db "SELECT value FROM settings WHERE key='${esc_key}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
+refresh_saved_tls_state() {
+    DB_DOMAIN=$(get_setting_value "webDomain")
+    SAVED_WEB_CERT=$(get_setting_value "webCertFile")
+    SAVED_WEB_KEY=$(get_setting_value "webKeyFile")
+    SAVED_SUB_DOMAIN=$(get_setting_value "subDomain")
+    SAVED_SUB_CERT=$(get_setting_value "subCertFile")
+    SAVED_SUB_KEY=$(get_setting_value "subKeyFile")
+    REQUESTED_SUB_DOMAIN="${XUI_SUB_DOMAIN:-$SAVED_SUB_DOMAIN}"
+}
+
 random_uint16() {
     od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' '
 }
@@ -650,6 +660,10 @@ auto_migrate_domains() {
                 sed -i "s/${old_target}/${new_target}/g" "$env_file" 2>/dev/null || true
             fi
         done
+    fi
+
+    if command -v refresh_saved_tls_state >/dev/null 2>&1; then
+        refresh_saved_tls_state
     fi
 }
 
@@ -1673,13 +1687,7 @@ fi
 # ============================================================================
 
 ENV_DOMAIN="$XUI_DOMAIN"
-DB_DOMAIN=$(get_setting_value "webDomain")
-SAVED_WEB_CERT=$(get_setting_value "webCertFile")
-SAVED_WEB_KEY=$(get_setting_value "webKeyFile")
-SAVED_SUB_DOMAIN=$(get_setting_value "subDomain")
-SAVED_SUB_CERT=$(get_setting_value "subCertFile")
-SAVED_SUB_KEY=$(get_setting_value "subKeyFile")
-REQUESTED_SUB_DOMAIN="${XUI_SUB_DOMAIN:-$SAVED_SUB_DOMAIN}"
+refresh_saved_tls_state
 PRESERVE_WEB_TLS=0
 PRESERVE_SUB_TLS=0
 SUB_TLS_UNAVAILABLE=0

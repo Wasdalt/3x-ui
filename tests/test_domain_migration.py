@@ -134,6 +134,38 @@ sync_inbound_tls_certs "" "" ""
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("Linked inbound id=1 to certificate:", proc.stdout)
 
+    def test_auto_migrate_domains_refreshes_saved_sub_tls_state(self):
+        script = f'''
+set -e
+DB_PATH="{self.db}"
+SCRIPT_DIR="{self.base}"
+. "{ROOT / "fork-policy.sh"}"
+
+sqlite_escape() {{ printf '%s' "$1" | sed "s/'/''/g"; }}
+sqlite_db() {{ sqlite3 "$DB_PATH" "$@"; }}
+get_setting_value() {{
+    sqlite_db "SELECT value FROM settings WHERE key = '$1' LIMIT 1;" 2>/dev/null || echo ""
+}}
+
+eval "$(sed -n '/migrate_db_domains() {{/,/sync_inbound_tls_certs() {{/p' "{INIT_SCRIPT}" | sed '$d')"
+eval "$(sed -n '/refresh_saved_tls_state() {{/,/^}}/p' "{INIT_SCRIPT}")"
+
+XUI_SUB_DOMAIN=""
+refresh_saved_tls_state
+[ "$REQUESTED_SUB_DOMAIN" = "workspace.r1.netstability.ru" ]
+
+auto_migrate_domains "r1.netstability.ru" "r2.netstability.ru"
+
+printf 'DB=%s|SUB=%s|REQ=%s|CERT=%s\\n' "$DB_DOMAIN" "$SAVED_SUB_DOMAIN" "$REQUESTED_SUB_DOMAIN" "$SAVED_WEB_CERT"
+'''
+        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(
+            "DB=workspace.r2.netstability.ru|SUB=workspace.r2.netstability.ru|"
+            "REQ=workspace.r2.netstability.ru|CERT=/etc/letsencrypt/live/workspace.r2.netstability.ru/fullchain.pem",
+            proc.stdout,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
